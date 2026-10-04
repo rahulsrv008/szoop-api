@@ -23,6 +23,8 @@ export class SmsService {
   ) {}
 
   async sendOtp(mobile: string, code: string) {
+    const provider = (this.config.get<string>('SMS_PROVIDER') || '').trim().toLowerCase();
+    if (provider === 'twilio') return this.sendTwilioVerify(mobile);
     const template =
       this.config.get<string>('SMS_OTP_TEMPLATE') ||
       'Your Oseedy verification code is {{code}}. It expires shortly.';
@@ -33,15 +35,30 @@ export class SmsService {
     const provider = (this.config.get<string>('SMS_PROVIDER') || '').trim().toLowerCase();
     const apiKey = (this.config.get<string>('SMS_API_KEY') || '').trim();
 
+    if (provider === 'twilio') {
+      this.logger.log(
+        `[sms:skip] Twilio Verify is login-only. Not texting ${mobile}`,
+        'SmsService',
+      );
+      return {
+        delivered: false,
+        provider: 'twilio',
+        error: 'Twilio Verify is only used for login OTP',
+      };
+    }
+
     if (!provider || !apiKey) {
       this.logger.log(`[sms:stub] to=${mobile} message="${message}"`, 'SmsService');
-      return { delivered: false, provider: 'stub' };
+      return {
+        delivered: false,
+        provider: 'stub',
+        error: 'SMS provider is not configured on the server',
+      };
     }
 
     try {
       if (provider === 'fast2sms') return await this.sendFast2Sms(apiKey, mobile, otp, message);
       if (provider === 'msg91') return await this.sendMsg91(apiKey, mobile, otp, message);
-      if (provider === 'twilio') return await this.sendTwilioVerify(mobile);
       return { delivered: false, provider, error: `Unknown SMS_PROVIDER "${provider}"` };
     } catch (err) {
       const error = err instanceof Error ? err.message : 'SMS send failed';
@@ -159,7 +176,9 @@ export class SmsService {
       return {
         delivered: false,
         provider: 'twilio',
-        error: this.twilioFriendlyError(res.json) || `HTTP ${res.status}`,
+        error:
+          this.twilioFriendlyError(res.json) ||
+          `Twilio could not send the OTP (HTTP ${res.status})`,
       };
     }
     this.logger.log(`OTP SMS sent via Twilio Verify to ${mobile}`, 'SmsService');
@@ -208,10 +227,15 @@ export class SmsService {
 
   private twilioFriendlyError(json: Record<string, unknown> | null) {
     const raw = this.stringifyError(json);
-    if (/unverified|not a valid.*phone|trial/i.test(raw)) {
-      return `${raw} Twilio trial can only text numbers you verified in the Twilio console.`;
+    const code = typeof json?.code === 'number' ? json.code : null;
+    if (code === 21608 || /unverified|not a valid.*phone|trial|verified tester/i.test(raw)) {
+      return (
+        raw ||
+        'Twilio trial can only text numbers added as verified testers in the Twilio console.'
+      );
     }
-    return raw;
+    if (raw) return raw;
+    return code ? `Twilio error ${code}` : '';
   }
 
   private async twilioForm(

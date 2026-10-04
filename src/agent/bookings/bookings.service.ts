@@ -9,12 +9,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import {
   Between,
   FindOptionsWhere,
+  In,
   IsNull,
   LessThanOrEqual,
   MoreThanOrEqual,
   Repository,
 } from 'typeorm';
-import { AgentEarning, AgentLocation, Booking, BookingItem, CustomerAddress, ServicePricing } from 'src/database/entities';
+import { AgentEarning, AgentLocation, Booking, BookingItem, BookingStatusHistory, BookingVisit, CustomerAddress, ServicePricing } from 'src/database/entities';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import {
@@ -22,7 +23,6 @@ import {
   SettingsService,
 } from 'src/common/services/settings.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
-import { SmsService } from 'src/integrations/sms/sms.service';
 import { AgentContextService } from '../shared/agent-context.service';
 import { AgentSkillsService } from '../skills/skills.service';
 import { todayString, toTimeString } from '../shared/date.util';
@@ -45,6 +45,10 @@ export class AgentBookingsService {
   constructor(
     @InjectRepository(Booking)
     private readonly bookingRepo: Repository<Booking>,
+    @InjectRepository(BookingVisit)
+    private readonly visitRepo: Repository<BookingVisit>,
+    @InjectRepository(BookingStatusHistory)
+    private readonly historyRepo: Repository<BookingStatusHistory>,
     @InjectRepository(AgentEarning)
     private readonly earningRepo: Repository<AgentEarning>,
     @InjectRepository(ServicePricing)
@@ -56,7 +60,6 @@ export class AgentBookingsService {
     private readonly history: BookingHistoryService,
     private readonly notifications: NotificationDispatchService,
     private readonly settings: SettingsService,
-    private readonly sms: SmsService,
     private readonly enhancedBooking: EnhancedBookingService,
   ) {}
 
@@ -101,7 +104,10 @@ export class AgentBookingsService {
       ...skipTake(query),
     });
 
-    const items = rows.map((booking) => this.toListItem(booking, agent.id));
+    const items = await this.withSchedule(
+      rows.map((booking) => this.toListItem(booking, agent.id)),
+      rows,
+    );
     if (scope !== 'available') {
       const withDistance = await this.annotateDistanceKm(agent.id, items);
       return paginated(withDistance, total, query);
@@ -125,7 +131,10 @@ export class AgentBookingsService {
       throw new NotFoundException('Booking not found');
     }
 
-    const listItem = this.toListItem(booking, agent.id);
+    const [listItem] = await this.withSchedule(
+      [this.toListItem(booking, agent.id)],
+      [booking],
+    );
     const [{ distanceKm }] = await this.annotateDistanceKm(agent.id, [listItem]);
 
     return {
@@ -188,13 +197,6 @@ export class AgentBookingsService {
       message: `${agentName} has accepted booking ${booking.bookingNumber}.${otpLine}`,
       type: 'booking_accepted',
     });
-    const customerMobile = booking.customer?.user?.mobile;
-    if (customerMobile && booking.startOtp) {
-      await this.sms.send(
-        customerMobile,
-        `ClearIt: ${agentName} will serve booking ${booking.bookingNumber}. Share start OTP ${booking.startOtp} only when your expert arrives.`,
-      );
-    }
 
     return this.toStatusResponse(booking);
   }
@@ -226,6 +228,14 @@ export class AgentBookingsService {
       dto.reason ? `Rejected by agent: ${dto.reason}` : 'Rejected by agent',
     );
 
+    if (isMine) {
+      await this.notifyCustomer(booking, {
+        title: 'Expert released your job',
+        message: `${agent.firstName || 'Your expert'} is no longer assigned to booking ${booking.bookingNumber}.`,
+        type: 'booking_released',
+      });
+    }
+
     return {
       bookingId: booking.id,
       bookingNumber: booking.bookingNumber,
@@ -256,8 +266,13 @@ export class AgentBookingsService {
     if (!['arriving', 'accepted'].includes(booking.status)) {
       throw new BadRequestException('Booking is not ready to start');
     }
-    if (!booking.startOtp || booking.startOtp !== dto.otp) {
+    const visit = await this.matchVisitOtp(booking, dto.otp);
+    if (!visit && (!booking.startOtp || booking.startOtp !== dto.otp)) {
       throw new BadRequestException('Incorrect start OTP');
+    }
+    if (visit && visit.status !== 'active') {
+      visit.status = 'active';
+      await this.visitRepo.save(visit);
     }
 
     await this.history.transition(booking, 'ongoing', userId);
@@ -278,6 +293,9 @@ export class AgentBookingsService {
   ) {
     const agent = await this.context.requireApprovedAgent(userId);
     const booking = await this.requireAssignedBooking(bookingId, agent.id);
+
+    const finishedEarly = await this.finishCurrentVisit(booking, userId, dto.notes);
+    if (finishedEarly) return finishedEarly;
 
     booking.endTime = toTimeString(new Date());
     if (dto.notes !== undefined) booking.notes = dto.notes;
@@ -301,6 +319,49 @@ export class AgentBookingsService {
         earningDate: earning.earningDate,
       },
     };
+  }
+
+  private async matchVisitOtp(booking: Booking, otp: string) {
+    const visits = await this.visitRepo.find({
+      where: { bookingId: booking.id },
+      order: { visitDate: 'ASC', startTime: 'ASC' },
+    });
+    return visits.find((visit) => visit.status !== 'done' && visit.otp === otp) ?? null;
+  }
+
+  /** Marks the current visit done. Returns a response when later visits are still left. */
+  private async finishCurrentVisit(booking: Booking, userId: string, notes?: string) {
+    const visits = await this.visitRepo.find({
+      where: { bookingId: booking.id },
+      order: { visitDate: 'ASC', startTime: 'ASC' },
+    });
+    if (!visits.length) return null;
+
+    const current =
+      visits.find((visit) => visit.status === 'active') ??
+      visits.find((visit) => visit.status === 'pending');
+    if (current) {
+      current.status = 'done';
+      current.completedAt = new Date();
+      await this.visitRepo.save(current);
+    }
+
+    const next = visits.find((visit) => visit.status === 'pending');
+    if (!next) return null;
+
+    booking.status = 'accepted';
+    booking.startOtp = next.otp;
+    booking.endTime = null;
+    if (notes !== undefined) booking.notes = notes;
+    await this.bookingRepo.save(booking);
+    const label = current ? `${shiftName(current.shift)} on ${String(current.visitDate).slice(0, 10)}` : 'This visit';
+    await this.history.record(booking.id, 'accepted', userId, `${label} completed`);
+    await this.notifyCustomer(booking, {
+      title: 'Visit completed',
+      message: `${label} for booking ${booking.bookingNumber} is done. The next visit has a new OTP.`,
+      type: 'booking_visit_done',
+    });
+    return this.toStatusResponse(booking);
   }
 
   /**
@@ -390,6 +451,52 @@ export class AgentBookingsService {
     return this.notifications.toUser(customerUserId, {
       ...input,
       data: { bookingId: booking.id, bookingNumber: booking.bookingNumber },
+    });
+  }
+
+  /** Visit counts for monthly plans, and the moment an in-progress job actually started. */
+  private async withSchedule<T extends { id: string }>(items: T[], rows: Booking[]) {
+    const ids = rows.map((row) => row.id);
+    const visits = ids.length
+      ? await this.visitRepo.find({ where: { bookingId: In(ids) } })
+      : [];
+    const ongoingIds = rows.filter((row) => row.status === 'ongoing').map((row) => row.id);
+    const history = ongoingIds.length
+      ? await this.historyRepo.find({
+          where: { bookingId: In(ongoingIds), status: 'ongoing' },
+          order: { createdAt: 'ASC' },
+        })
+      : [];
+    const startedAt = new Map<string, Date>();
+    for (const row of history) {
+      if (!startedAt.has(row.bookingId)) startedAt.set(row.bookingId, row.createdAt);
+    }
+    const grouped = new Map<string, BookingVisit[]>();
+    for (const visit of visits) {
+      const list = grouped.get(visit.bookingId) ?? [];
+      list.push(visit);
+      grouped.set(visit.bookingId, list);
+    }
+    return items.map((item) => {
+      const plan = grouped.get(item.id) ?? [];
+      const done = plan.filter((visit) => visit.status === 'done').length;
+      const total = plan.length;
+      const next = plan
+        .filter((visit) => visit.status !== 'done')
+        .sort((a, b) =>
+          `${String(a.visitDate).slice(0, 10)}${a.startTime}`.localeCompare(
+            `${String(b.visitDate).slice(0, 10)}${b.startTime}`,
+          ),
+        )[0];
+      return {
+        ...item,
+        visitsTotal: total,
+        visitsDone: done,
+        visitsScheduled: total > 1 ? Math.max(0, total - done - (done < total ? 1 : 0)) : 0,
+        startedAt: startedAt.get(item.id)?.toISOString() ?? null,
+        nextVisitDate: next ? String(next.visitDate).slice(0, 10) : null,
+        nextVisitTime: next?.startTime ?? null,
+      };
     });
   }
 
@@ -505,6 +612,12 @@ function matchesSkill(serviceName: string, keywords: string[]) {
   return keywords.some(
     (keyword) => haystack.includes(keyword) || keyword.includes(haystack),
   );
+}
+
+function shiftName(shift: string) {
+  if (shift === 'morning') return 'Morning';
+  if (shift === 'evening') return 'Evening';
+  return 'Visit';
 }
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {

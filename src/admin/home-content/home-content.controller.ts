@@ -63,7 +63,7 @@ export class AdminHomeContentController {
   }
 
   @Post('categories/:id/options')
-  @ApiOperation({ summary: 'Add an option (e.g. Smart Cook) to a category' })
+  @ApiOperation({ summary: 'Add an option (e.g. Healthy Cook) to a category' })
   createOption(
     @CurrentUser('sub') adminId: string,
     @Param('id', ParseUUIDPipe) categoryId: string,

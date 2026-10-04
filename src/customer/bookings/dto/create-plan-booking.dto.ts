@@ -56,6 +56,15 @@ export class CreatePlanBookingDto {
   @Max(12)
   personCount?: number;
 
+  @ApiPropertyOptional({
+    description: 'Cook plan length in days: 3 (free trial), 7, 14, 21 or 28',
+    example: 7,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  durationDays?: number;
+
   @ApiPropertyOptional({ example: 'Ring the bell twice' })
   @IsOptional()
   @IsString()

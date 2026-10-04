@@ -3,6 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   AgentEarning,
   Booking,
+  BookingStatusHistory,
+  BookingVisit,
   ServicePricing,
   AgentLocation,
   ServiceChecklist,
@@ -24,6 +26,8 @@ import { ChecklistService } from 'src/common/services/checklist.service';
   imports: [
     TypeOrmModule.forFeature([
       Booking,
+      BookingStatusHistory,
+      BookingVisit,
       AgentEarning,
       ServicePricing,
       AgentLocation,

@@ -9,6 +9,7 @@ import { randomInt } from 'crypto';
 import {
   Between,
   In,
+  Like,
   LessThanOrEqual,
   MoreThanOrEqual,
   Repository,
@@ -16,6 +17,7 @@ import {
 import {
   Booking,
   BookingItem,
+  BookingVisit,
   Coupon,
   CouponUsage,
   CustomerAddress,
@@ -24,10 +26,13 @@ import {
   HomePricingTier,
   Payment,
   Rating,
+  SupportTicket,
   Service,
   ServiceArea,
   ServicePricing,
 } from 'src/database/entities';
+import { findBeautyService } from './beauty-catalog';
+import { CreateBeautyBookingDto } from './dto/create-beauty-booking.dto';
 import { CreatePlanBookingDto } from './dto/create-plan-booking.dto';
 import { IdentityService } from 'src/common/auth/identity.service';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
@@ -46,6 +51,7 @@ import { CreateCustomerBookingDto } from './dto/create-booking.dto';
 import { CancelCustomerBookingDto } from './dto/cancel-booking.dto';
 import { ListCustomerBookingsQueryDto } from './dto/list-bookings.dto';
 import { RescheduleCustomerBookingDto } from './dto/reschedule-booking.dto';
+import { buildVisitPlan, freshOtp } from 'src/common/booking/booking-visits';
 
 const DETAIL_RELATIONS = [
   'items',
@@ -74,6 +80,8 @@ export class CustomerBookingsService {
     private readonly bookingRepo: Repository<Booking>,
     @InjectRepository(BookingItem)
     private readonly bookingItemRepo: Repository<BookingItem>,
+    @InjectRepository(BookingVisit)
+    private readonly visitRepo: Repository<BookingVisit>,
     @InjectRepository(CustomerAddress)
     private readonly addressRepo: Repository<CustomerAddress>,
     @InjectRepository(Service)
@@ -90,6 +98,8 @@ export class CustomerBookingsService {
     private readonly couponUsageRepo: Repository<CouponUsage>,
     @InjectRepository(Rating)
     private readonly ratingRepo: Repository<Rating>,
+    @InjectRepository(SupportTicket)
+    private readonly ticketRepo: Repository<SupportTicket>,
     @InjectRepository(HomeCategory)
     private readonly homeCategoryRepo: Repository<HomeCategory>,
     @InjectRepository(HomeCategoryOption)
@@ -189,6 +199,8 @@ export class CustomerBookingsService {
       await this.couponRepo.increment({ id: coupon.coupon.id }, 'usedCount', 1);
     }
 
+    await this.attachVisits(booking);
+
     await this.history.record(
       booking.id,
       booking.status,
@@ -230,24 +242,49 @@ export class CustomerBookingsService {
       if (!option) throw new NotFoundException('This plan is unavailable');
     }
 
-    const tiers: HomePricingTier[] = (option ?? category).pricing ?? [];
+    const serviceName = option?.title ?? category.title;
+    const cookService = isCookService(serviceName);
+    let tiers: HomePricingTier[] = [...((option ?? category).pricing ?? [])];
+    if (cookService && !tiers.length) {
+      tiers = [
+        { label: 'Morning', subtitle: '6 AM – 11 AM', minutes: 45, startTime: '08:00', price: 1200 },
+        { label: 'Evening', subtitle: '4:45 PM – 9:45 PM', minutes: 45, startTime: '16:45', price: 1200 },
+        { label: 'Both', subtitle: 'Morning & evening', minutes: 45, startTime: '08:00', price: 2000 },
+      ];
+    }
     const tier = tiers[dto.tierIndex];
-    if (!tier || !(Number(tier.price) > 0)) {
+    if (!tier) {
+      throw new BadRequestException('Please choose a valid option');
+    }
+    if (!cookService && !(Number(tier.price) > 0)) {
       throw new BadRequestException('Please choose a valid option');
     }
 
+    const durationDays = cookService
+      ? [3, 7, 14, 21, 28].includes(Number(dto.durationDays))
+        ? Number(dto.durationDays)
+        : 28
+      : 28;
+
+    if (cookService && durationDays <= 3 && (await this.customerUsedCookTrial(customerId))) {
+      throw new BadRequestException('You have already used the 3-day Healthy Cook trial');
+    }
+
     // Shift tiers carry a start time; duration tiers are On Demand.
-    const planType = tier.startTime ? 'MONTHLY' : 'HOURLY';
-    const { bookingDate, startTime } =
-      planType === 'HOURLY'
+    const planType = cookService || tier.startTime ? 'MONTHLY' : 'HOURLY';
+    const { bookingDate, startTime } = cookService
+      ? {
+          bookingDate: planStartDate(dto.bookingDate),
+          startTime: toTimeString(dto.startTime || tier.startTime || '08:00'),
+        }
+      : planType === 'HOURLY'
         ? scheduledSlot(dto.bookingDate, dto.startTime)
         : {
             bookingDate: planStartDate(dto.bookingDate),
             startTime: toTimeString(tier.startTime || '08:00'),
           };
 
-    const serviceName = option?.title ?? category.title;
-    const cook = isCookService(serviceName)
+    const cook = cookService
       ? cookCharge(
           dto.personCount ?? 1,
           await this.cookRate(tier.label),
@@ -258,6 +295,8 @@ export class CustomerBookingsService {
           includesCleaning(serviceName)
             ? await this.settings.getNumber(SETTING_KEYS.COOK_CLEANING_MONTHLY, 1200)
             : 0,
+          durationDays,
+          /both/i.test(tier.label),
         )
       : null;
     const subtotal = cook ? cook.gross : round2(Number(tier.price));
@@ -274,8 +313,16 @@ export class CustomerBookingsService {
     const peopleLabel = cook
       ? ` · ${cook.count} ${cook.count === 1 ? 'person' : 'people'}`
       : '';
-    const planTitle =
-      planType === 'MONTHLY'
+    const serviceDays = durationDays === 28 ? 30 : durationDays;
+    const packLabel =
+      durationDays <= 3
+        ? 'Trial pack'
+        : durationDays === 28
+          ? '28 days + 2 free'
+          : `${durationDays} days`;
+    const planTitle = cookService
+      ? `${serviceName} · ${packLabel} · ${tier.label}${peopleLabel}`
+      : planType === 'MONTHLY'
         ? `${serviceName} · ${tier.label}${peopleLabel} (monthly)`
         : `${serviceName} · ${tier.label}`;
 
@@ -287,15 +334,17 @@ export class CustomerBookingsService {
         serviceAreaId: serviceArea?.id ?? null,
         bookingDate,
         startTime,
-        durationMinutes: tier.minutes ?? 240,
+        durationMinutes: cookService ? 45 : tier.minutes ?? 240,
         subtotal: subtotal.toFixed(2),
         discount: discount.toFixed(2),
         tax: tax.toFixed(2),
         totalAmount: totalAmount.toFixed(2),
-        paymentStatus: 'PENDING',
+        paymentStatus: totalAmount <= 0 ? 'PAID' : 'PENDING',
         status: 'finding',
         startOtp: String(randomInt(1000, 10000)),
-        notes: dto.notes ?? null,
+        notes: [dto.notes, cookService ? `Service runs for ${serviceDays} days.` : '']
+          .filter(Boolean)
+          .join(' · ') || null,
         planType,
         planTitle,
         homeCategoryId: category.id,
@@ -308,9 +357,16 @@ export class CustomerBookingsService {
         bookingId: booking.id,
         customerId,
         amount: totalAmount.toFixed(2),
-        paymentStatus: 'PENDING',
+        paymentStatus: totalAmount <= 0 ? 'PAID' : 'PENDING',
+        ...(totalAmount <= 0 ? { paidAt: new Date() } : {}),
       }),
     );
+
+    await this.attachVisits(booking);
+
+    if (totalAmount <= 0) {
+      await this.history.transition(booking, 'paid', userId, 'Free booking is open for agents');
+    }
 
     await this.history.record(
       booking.id,
@@ -320,6 +376,135 @@ export class CustomerBookingsService {
     );
 
     return this.detail(userId, booking.id);
+  }
+
+  async createBeauty(userId: string, dto: CreateBeautyBookingDto) {
+    const service = findBeautyService(dto.serviceId);
+    if (!service) throw new NotFoundException('This service is unavailable');
+
+    const customerId = await this.identity.requireCustomerId(userId);
+    const address = await this.addressRepo.findOne({
+      where: { id: dto.addressId, customerId },
+    });
+    if (!address) throw new NotFoundException('Address not found');
+
+    const { bookingDate, startTime } = scheduledSlot(dto.bookingDate, dto.startTime);
+    const subtotal = round2(service.price);
+    const taxPercent = await this.settings.getNumber(SETTING_KEYS.BOOKING_TAX_PERCENT, 0);
+    const tax = round2((subtotal * taxPercent) / 100);
+    const totalAmount = round2(subtotal + tax);
+    const serviceArea = await this.resolveAddressZone(address);
+
+    const booking = await this.bookingRepo.save(
+      this.bookingRepo.create({
+        bookingNumber: await this.generateBookingNumber(),
+        customerId,
+        addressId: address.id,
+        serviceAreaId: serviceArea?.id ?? null,
+        bookingDate,
+        startTime,
+        durationMinutes: service.minutes,
+        subtotal: subtotal.toFixed(2),
+        discount: '0.00',
+        tax: tax.toFixed(2),
+        totalAmount: totalAmount.toFixed(2),
+        paymentStatus: 'PENDING',
+        status: 'finding',
+        startOtp: String(randomInt(1000, 10000)),
+        notes: [service.includes.join(', '), dto.notes].filter(Boolean).join(' · ') || null,
+        planType: 'HOURLY',
+        planTitle: service.title,
+        homeCategoryId: null,
+        homeOptionId: null,
+      }),
+    );
+
+    await this.paymentRepo.save(
+      this.paymentRepo.create({
+        bookingId: booking.id,
+        customerId,
+        amount: totalAmount.toFixed(2),
+        paymentStatus: 'PENDING',
+      }),
+    );
+
+    await this.attachVisits(booking);
+    await this.history.record(
+      booking.id,
+      booking.status,
+      userId,
+      `Beauty booked by customer: ${service.title}`,
+    );
+
+    return this.detail(userId, booking.id);
+  }
+
+  async cookTrialUsed(userId: string) {
+    const customerId = await this.identity.requireCustomerId(userId);
+    return { used: await this.customerUsedCookTrial(customerId) };
+  }
+
+  private async attachVisits(booking: Booking) {
+    const existing = await this.visitRepo.count({ where: { bookingId: booking.id } });
+    if (existing) return;
+    const plan = buildVisitPlan(booking);
+    const firstOtp = booking.startOtp ?? freshOtp();
+    const done = booking.status === 'completed';
+    const rows = plan.map((visit, index) =>
+      this.visitRepo.create({
+        bookingId: booking.id,
+        visitDate: visit.visitDate,
+        shift: visit.shift,
+        startTime: visit.startTime,
+        otp: index === 0 ? firstOtp : freshOtp(),
+        status: done ? 'done' : booking.status === 'ongoing' && index === 0 ? 'active' : 'pending',
+        completedAt: done ? new Date() : null,
+      }),
+    );
+    if (!rows.length) return;
+    await this.visitRepo.save(rows);
+    if (booking.startOtp !== rows[0].otp) {
+      booking.startOtp = rows[0].otp;
+      await this.bookingRepo.save(booking);
+    }
+  }
+
+  private async visitsFor(bookings: Booking[]) {
+    const grouped = new Map<string, ReturnType<CustomerBookingsService['presentVisit']>[]>();
+    if (!bookings.length) return grouped;
+    await Promise.all(bookings.map((booking) => this.attachVisits(booking)));
+    const rows = await this.visitRepo.find({
+      where: { bookingId: In(bookings.map((booking) => booking.id)) },
+      order: { visitDate: 'ASC', startTime: 'ASC' },
+    });
+    for (const row of rows) {
+      const list = grouped.get(row.bookingId) ?? [];
+      list.push(this.presentVisit(row));
+      grouped.set(row.bookingId, list);
+    }
+    return grouped;
+  }
+
+  private presentVisit(visit: BookingVisit) {
+    return {
+      id: visit.id,
+      visitDate: String(visit.visitDate).slice(0, 10),
+      shift: visit.shift,
+      startTime: visit.startTime,
+      otp: visit.otp,
+      status: visit.status,
+    };
+  }
+
+  private async customerUsedCookTrial(customerId: string) {
+    const count = await this.bookingRepo
+      .createQueryBuilder('booking')
+      .where('booking.customerId = :customerId', { customerId })
+      .andWhere('booking.status != :cancelled', { cancelled: 'cancelled' })
+      .andWhere('booking.planTitle ILIKE :trial', { trial: '%Trial pack%' })
+      .andWhere('booking.planTitle ILIKE :cook', { cook: '%cook%' })
+      .getCount();
+    return count > 0;
   }
 
   async list(userId: string, query: ListCustomerBookingsQueryDto) {
@@ -336,6 +521,15 @@ export class CustomerBookingsService {
       ...skipTake(query),
     });
 
+    const visitsByBooking = await this.visitsFor(bookings);
+    const ratedRows = bookings.length
+      ? await this.ratingRepo.find({
+          where: { bookingId: In(bookings.map((booking) => booking.id)) },
+          select: ['id', 'bookingId'],
+        })
+      : [];
+    const ratedIds = new Set(ratedRows.map((row) => row.bookingId));
+
     const items = bookings.map((booking) => ({
       id: booking.id,
       bookingNumber: booking.bookingNumber,
@@ -348,7 +542,10 @@ export class CustomerBookingsService {
       planType: booking.planType,
       planTitle: booking.planTitle,
       startOtp: booking.startOtp,
+      visits: visitsByBooking.get(booking.id) ?? [],
       createdAt: booking.createdAt,
+      updatedAt: booking.updatedAt,
+      rated: ratedIds.has(booking.id),
       address: booking.address
         ? [booking.address.addressLine1, booking.address.city]
             .filter(Boolean)
@@ -395,6 +592,7 @@ export class CustomerBookingsService {
       planTitle: booking.planTitle,
       // Handed to the agent on arrival to start the job.
       startOtp: booking.startOtp,
+      visits: (await this.visitsFor([booking])).get(booking.id) ?? [],
       serviceAreaId: booking.serviceAreaId,
       items: (booking.items ?? []).map((item) => ({
         id: item.id,
@@ -454,9 +652,49 @@ export class CustomerBookingsService {
     };
   }
 
+  async requestCookChange(userId: string, id: string) {
+    const customerId = await this.identity.requireCustomerId(userId);
+    const booking = await this.findOwn(customerId, id, ['agent']);
+    if (booking.planType !== 'MONTHLY') {
+      throw new BadRequestException('Cook changes are for monthly plans');
+    }
+    if (!booking.agentId || !booking.agent) {
+      throw new BadRequestException('A cook has not been assigned yet');
+    }
+    if (booking.status === 'completed' || booking.status === 'cancelled') {
+      throw new BadRequestException('This booking is already closed');
+    }
+
+    const existing = await this.ticketRepo.findOne({
+      where: {
+        userId,
+        bookingId: booking.id,
+        status: 'OPEN',
+        subject: Like('Change cook%'),
+      },
+    });
+    if (existing) return { id: existing.id, alreadyRequested: true };
+
+    const cook = agentName(booking.agent.firstName, booking.agent.lastName);
+    const ticket = await this.ticketRepo.save(
+      this.ticketRepo.create({
+        userId,
+        bookingId: booking.id,
+        subject: `Change cook · ${booking.bookingNumber}`,
+        description: `Customer asked to change the cook on monthly booking ${booking.bookingNumber}. Current cook: ${cook}.`,
+        priority: 'HIGH',
+        status: 'OPEN',
+      }),
+    );
+    return { id: ticket.id, alreadyRequested: false };
+  }
+
   async cancel(userId: string, id: string, dto: CancelCustomerBookingDto) {
     const customerId = await this.identity.requireCustomerId(userId);
     const booking = await this.findOwn(customerId, id, ['payment', 'agent']);
+    if (booking.planType === 'MONTHLY' && booking.agentId) {
+      throw new BadRequestException('A cook is already assigned. Ask to change cook instead of cancelling.');
+    }
     // Checked up front so a rejected cancellation leaves the payment untouched.
     assertTransition(booking.status, 'cancelled');
 
@@ -724,17 +962,42 @@ function includesCleaning(title: string) {
   return /clean/i.test(title);
 }
 
-/** First person pays the full cook rate. Each extra person is discounted. Cleaning is a flat monthly add-on. */
+const COOK_PACK_PRICE: Record<number, number> = {
+  3: 0,
+  7: 600,
+  14: 1100,
+  21: 1600,
+  28: 2200,
+};
+
+const COOK_ONE_TIME_OFF: Record<number, number> = {
+  3: 0,
+  7: 200,
+  14: 400,
+  21: 600,
+  28: 800,
+};
+
+function cookPackRate(days: number, both: boolean) {
+  const bothPrice = COOK_PACK_PRICE[days] ?? COOK_PACK_PRICE[28];
+  if (both || bothPrice === 0) return bothPrice;
+  return Math.max(0, bothPrice - (COOK_ONE_TIME_OFF[days] ?? 0));
+}
+
+/** First person pays the pack price. Each extra person is discounted. Cleaning scales with the paid days. */
 function cookCharge(
   people: number,
-  perPerson: number,
+  _perPerson: number,
   discountPercent: number,
   cleaningMonthly: number,
+  days = 28,
+  both = true,
 ) {
   const count = Math.min(12, Math.max(1, Math.floor(people)));
-  const rate = round2(perPerson);
+  const rate = cookPackRate(days, both);
   const percent = Math.min(100, Math.max(0, discountPercent));
-  const cleaning = round2(Math.max(0, cleaningMonthly));
+  const factor = days / 28;
+  const cleaning = rate === 0 ? 0 : round2(Math.max(0, cleaningMonthly) * factor);
   const cooking = round2(rate * count);
   const discount = round2(((count - 1) * rate * percent) / 100);
   const gross = round2(cooking + cleaning);

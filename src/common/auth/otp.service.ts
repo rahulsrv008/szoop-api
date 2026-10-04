@@ -80,13 +80,17 @@ export class OtpService {
       }),
     );
 
-    const sms = useTwilio
-      ? await this.sms.sendOtp(mobile, '')
-      : await this.sms.sendOtp(mobile, code);
-    if (!demoMode && !sms.delivered) {
-      throw new InternalServerErrorException(
-        sms.error || 'Could not send OTP SMS. Try again in a moment.',
-      );
+    if (demoMode) {
+      this.logger.log(`[otp:demo] ${purpose} ${mobile} code=${code}`, 'OtpService');
+    } else {
+      const sms = useTwilio
+        ? await this.sms.sendOtp(mobile, '')
+        : await this.sms.sendOtp(mobile, code);
+      if (!sms.delivered) {
+        throw new InternalServerErrorException(
+          sms.error || 'Could not send OTP SMS. Try again in a moment.',
+        );
+      }
     }
 
     return {
@@ -116,17 +120,18 @@ export class OtpService {
     }
 
     session.attempts += 1;
-    const useTwilio = this.sms.usesTwilioVerify() && session.otpHash === hashOtp('__twilio_verify__');
-    if (useTwilio) {
+    const twilioSent = session.otpHash === hashOtp('__twilio_verify__');
+    const localMatch = session.otpHash === hashOtp(code);
+    if (twilioSent || (!localMatch && this.sms.usesTwilioVerify())) {
       const check = await this.sms.checkTwilioOtp(mobile, code);
-      if (!check.ok) {
+      if (!check.ok && !localMatch) {
         await this.otpRepo.save(session);
         const left = Math.max(maxAttempts - session.attempts, 0);
         throw new UnauthorizedException(
           `${'error' in check ? check.error : 'Invalid OTP'} — ${left} attempt(s) left`,
         );
       }
-    } else if (session.otpHash !== hashOtp(code)) {
+    } else if (!localMatch) {
       await this.otpRepo.save(session);
       const left = Math.max(maxAttempts - session.attempts, 0);
       throw new UnauthorizedException(`Invalid OTP — ${left} attempt(s) left`);

@@ -96,7 +96,11 @@ export class AgentSkillsService {
     const [agent, rows] = await Promise.all([
       this.agentRepo.findOne({ where: { id: agentId } }),
       this.agentSkillRepo.find({
-        where: { agentId, selected: true, trainingStatus: 'VERIFIED' },
+        where: {
+          agentId,
+          selected: true,
+          trainingStatus: In(['VERIFIED', 'IN_TRAINING']),
+        },
         relations: ['skill'],
       }),
     ]);

@@ -635,12 +635,14 @@ INSERT INTO home_category_options
   (id, category_id, title, subtitle, price_label, badge, popup_title, highlights, sort_order)
 VALUES
   ('b1b00000-0000-4000-8000-000000000001', 'a1a00000-0000-4000-8000-000000000002',
-   'Smart Cook', 'Home-style meals, every day', '₹4,999 / month', NULL, 'What your cook will do',
-   '[{"text":"Plans a weekly menu with you","icon":"calendar"},
+   'Healthy Cook', 'Healthy home-style & diet meals, every day', '₹4,999 / month', 'HEALTHY', 'What your cook will do',
+   '[{"text":"Healthy, balanced home-style meals","icon":"leaf"},
+     {"text":"Diet & calorie-aware meal preparation","icon":"nutrition"},
+     {"text":"Plans a weekly menu with you","icon":"calendar"},
      {"text":"Cooks 2 fresh meals a day","icon":"restaurant"},
-     {"text":"Chops, preps & stores groceries","icon":"nutrition"},
+     {"text":"Chops, preps & stores groceries","icon":"basket"},
      {"text":"Cleans the kitchen after cooking","icon":"sparkles"},
-     {"text":"Hygiene-checked & verified","icon":"shield-checkmark"}]', 1),
+     {"text":"Hygiene-checked & verified cook","icon":"shield-checkmark"}]', 1),
   ('b1b00000-0000-4000-8000-000000000002', 'a1a00000-0000-4000-8000-000000000002',
    'House Cleaning', 'A spotless home, daily', '₹3,999 / month', NULL, 'What your expert will do',
    '[{"text":"Daily sweeping & mopping","icon":"home"},
@@ -650,7 +652,9 @@ VALUES
      {"text":"Same trusted expert every day","icon":"person"}]', 2),
   ('b1b00000-0000-4000-8000-000000000003', 'a1a00000-0000-4000-8000-000000000002',
    'Cook + Cleaning', 'Both, bundled & cheaper', '₹7,999 / month', 'BEST VALUE', 'Everything in one pass',
-   '[{"text":"Everything in Smart Cook","icon":"restaurant"},
+   '[{"text":"Healthy, balanced home-style meals","icon":"leaf"},
+     {"text":"Diet & calorie-aware meal preparation","icon":"nutrition"},
+     {"text":"Everything in Healthy Cook","icon":"restaurant"},
      {"text":"Everything in House Cleaning","icon":"home"},
      {"text":"Dedicated, verified experts","icon":"people"},
      {"text":"Free replacement when on leave","icon":"swap-horizontal"},
@@ -662,8 +666,8 @@ INSERT INTO home_popular_items
 VALUES
   ('c1c00000-0000-4000-8000-000000000001', 'Hourly Help · 2 hrs', 'Quick clean-up by a verified expert',
    '₹398', 'TRENDING', 4.8, 'a1a00000-0000-4000-8000-000000000001', NULL, 1),
-  ('c1c00000-0000-4000-8000-000000000002', 'Smart Cook Pass', 'Home-style meals, every day',
-   '₹4,999 / mo', NULL, 4.7, 'a1a00000-0000-4000-8000-000000000002', 'b1b00000-0000-4000-8000-000000000001', 2),
+  ('c1c00000-0000-4000-8000-000000000002', 'Healthy Cook Pass', 'Healthy home-style & diet meals, every day',
+   '₹4,999 / mo', 'HEALTHY', 4.7, 'a1a00000-0000-4000-8000-000000000002', 'b1b00000-0000-4000-8000-000000000001', 2),
   ('c1c00000-0000-4000-8000-000000000003', 'Cook + Cleaning Pass', 'Our best-value monthly plan',
    '₹7,999 / mo', 'BEST VALUE', 4.9, 'a1a00000-0000-4000-8000-000000000002', 'b1b00000-0000-4000-8000-000000000003', 3)
 ON CONFLICT (id) DO NOTHING;

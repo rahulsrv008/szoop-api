@@ -161,7 +161,7 @@ export class CreateHomeCategoryDto extends HighlightsField {
 export class UpdateHomeCategoryDto extends PartialType(CreateHomeCategoryDto) {}
 
 export class CreateHomeCategoryOptionDto extends HighlightsField {
-  @ApiProperty({ example: 'Smart Cook' })
+  @ApiProperty({ example: 'Healthy Cook' })
   @IsString()
   @MinLength(2)
   @MaxLength(100)

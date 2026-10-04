@@ -15,6 +15,7 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { CustomerBookingsService } from './bookings.service';
 import { CancelCustomerBookingDto } from './dto/cancel-booking.dto';
 import { CreateCustomerBookingDto } from './dto/create-booking.dto';
+import { CreateBeautyBookingDto } from './dto/create-beauty-booking.dto';
 import { CreatePlanBookingDto } from './dto/create-plan-booking.dto';
 import { ListCustomerBookingsQueryDto } from './dto/list-bookings.dto';
 import { RescheduleCustomerBookingDto } from './dto/reschedule-booking.dto';
@@ -45,6 +46,21 @@ export class CustomerBookingsController {
     return this.bookingsService.createPlan(userId, dto);
   }
 
+  @Post('beauty')
+  @ApiOperation({ summary: 'Book a Beauty at Home service or package' })
+  createBeauty(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: CreateBeautyBookingDto,
+  ) {
+    return this.bookingsService.createBeauty(userId, dto);
+  }
+
+  @Get('cook-trial')
+  @ApiOperation({ summary: 'Whether this customer has already used the Healthy Cook trial' })
+  cookTrial(@CurrentUser('sub') userId: string) {
+    return this.bookingsService.cookTrialUsed(userId);
+  }
+
   @Get()
   @ApiOperation({ summary: 'Booking history, newest first' })
   list(
@@ -61,6 +77,16 @@ export class CustomerBookingsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.bookingsService.detail(userId, id);
+  }
+
+  @Post(':id/change-cook')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Ask admin to change the cook on a monthly booking' })
+  changeCook(
+    @CurrentUser('sub') userId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.bookingsService.requestCookChange(userId, id);
   }
 
   @Post(':id/cancel')

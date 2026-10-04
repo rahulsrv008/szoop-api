@@ -17,6 +17,8 @@ export { ServicePricing } from './service-pricing';
 export { Society } from './society';
 export { Booking } from './booking';
 export type { BookingStatus } from './booking';
+export { BookingVisit } from './booking-visit';
+export type { BookingVisitShift, BookingVisitStatus } from './booking-visit';
 export { BookingItem } from './booking-item';
 export { BookingStatusHistory } from './booking-status-history';
 export { AgentAvailability } from './agent-availability';

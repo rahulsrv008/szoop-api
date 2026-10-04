@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   Booking,
   BookingItem,
+  BookingVisit,
   Coupon,
   CouponUsage,
   CustomerAddress,
@@ -10,6 +11,7 @@ import {
   HomeCategoryOption,
   Payment,
   Rating,
+  SupportTicket,
   Service,
   ServiceArea,
   ServicePricing,
@@ -22,6 +24,7 @@ import { CustomerBookingsService } from './bookings.service';
     TypeOrmModule.forFeature([
       Booking,
       BookingItem,
+      BookingVisit,
       CustomerAddress,
       Service,
       ServicePricing,
@@ -30,6 +33,7 @@ import { CustomerBookingsService } from './bookings.service';
       Coupon,
       CouponUsage,
       Rating,
+      SupportTicket,
       HomeCategory,
       HomeCategoryOption,
     ]),
