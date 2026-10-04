@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { Admin } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { IdentityService } from 'src/common/auth/identity.service';
 import { TokenService } from 'src/common/auth/token.service';
 import { AuditService } from 'src/common/services/audit.service';
@@ -22,6 +23,7 @@ export class AdminAuthService {
     private readonly identity: IdentityService,
     private readonly tokens: TokenService,
     private readonly audit: AuditService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async login(email: string, password: string) {
@@ -44,7 +46,7 @@ export class AdminAuthService {
     const authUser = await this.identity.buildAdminAuthUser(admin.id);
     const session = await this.tokens.issueSession(authUser);
 
-    return { ...session, admin: this.toProfile(admin) };
+    return { ...session, admin: await this.toProfile(admin) };
   }
 
   refresh(refreshToken: string) {
@@ -105,7 +107,9 @@ export class AdminAuthService {
     return admin;
   }
 
-  private toProfile(admin: Admin) {
+  private async toProfile(admin: Admin) {
+    const zoneMap = await this.access.zonesFor([admin.id]);
+    const zones = zoneMap.get(admin.id) ?? [];
     return {
       id: admin.id,
       email: admin.email,
@@ -114,6 +118,8 @@ export class AdminAuthService {
       role: admin.role,
       isActive: admin.isActive,
       createdAt: admin.createdAt,
+      unrestricted: admin.role === 'SUPER_ADMIN',
+      zones: admin.role === 'SUPER_ADMIN' ? [] : zones,
     };
   }
 }

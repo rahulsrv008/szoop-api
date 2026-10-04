@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   Admin,
+  AdminZone,
   Agent,
   AuditLog,
   Booking,
@@ -25,6 +26,7 @@ import { NotificationDispatchService } from './services/notification-dispatch.se
 import { BookingHistoryService } from './booking/booking-history.service';
 import { SettingsService } from './services/settings.service';
 import { ZoneResolverService } from './services/zone-resolver.service';
+import { AdminAccessService } from './auth/admin-access';
 
 /**
  * Cross-app building blocks (identity, tokens, OTP, audit, notifications).
@@ -40,6 +42,7 @@ import { ZoneResolverService } from './services/zone-resolver.service';
       CustomerAddress,
       Agent,
       Admin,
+      AdminZone,
       OtpVerification,
       RefreshToken,
       Notification,
@@ -61,6 +64,7 @@ import { ZoneResolverService } from './services/zone-resolver.service';
     BookingHistoryService,
     SettingsService,
     ZoneResolverService,
+    AdminAccessService,
   ],
   exports: [
     IdentityService,
@@ -71,6 +75,7 @@ import { ZoneResolverService } from './services/zone-resolver.service';
     BookingHistoryService,
     SettingsService,
     ZoneResolverService,
+    AdminAccessService,
   ],
 })
 export class CommonModule {}

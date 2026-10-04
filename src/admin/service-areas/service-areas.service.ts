@@ -13,6 +13,7 @@ import {
   ServicePricing,
   ServiceZoneArea,
 } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import {
@@ -81,6 +82,7 @@ export class AdminServiceAreasService implements OnModuleInit {
     private readonly bookingRepo: Repository<Booking>,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async onModuleInit() {
@@ -235,6 +237,7 @@ export class AdminServiceAreasService implements OnModuleInit {
     if (query.region) {
       qb.andWhere('area.region = :region', { region: query.region.trim() });
     }
+    this.access.restrictZoneColumn(qb, 'area.id');
     return qb;
   }
 
@@ -245,6 +248,7 @@ export class AdminServiceAreasService implements OnModuleInit {
       order: { zoneAreas: { sortOrder: 'ASC' } },
     });
     if (!area) throw new NotFoundException('Service area not found');
+    this.access.assertZone(area.id, 'Service area');
     return area;
   }
 

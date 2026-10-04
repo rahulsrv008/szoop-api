@@ -18,6 +18,7 @@ import {
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
 import { ListAdminAgentsDto } from './dto/list-agents.dto';
 import { ApproveAdminAgentDto } from './dto/approve-agent.dto';
@@ -68,6 +69,7 @@ export class AdminAgentsService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
     private readonly zones: ZoneResolverService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list(query: ListAdminAgentsDto) {
@@ -571,6 +573,7 @@ export class AdminAgentsService {
         to: new Date(`${query.to}T23:59:59.999Z`),
       });
     }
+    this.access.restrictAgent(qb, 'agent');
     return qb;
   }
 
@@ -593,6 +596,7 @@ export class AdminAgentsService {
       relations: ['user'],
     });
     if (!agent) throw new NotFoundException('Agent not found');
+    this.access.assertAgent(agent);
     return agent;
   }
 

@@ -7,6 +7,7 @@ import {
   AgentIncentive,
   SalaryRecord,
 } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import {
@@ -67,6 +68,7 @@ export class AdminEarningsService {
     private readonly settings: SettingsService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async listEarnings(query: ListAdminEarningsDto) {
@@ -137,7 +139,7 @@ export class AdminEarningsService {
     const year = query.year ?? now.getFullYear();
     const { from, to } = monthBounds(month, year);
 
-    const rows = await this.earningRepo
+    const rowsQb = this.earningRepo
       .createQueryBuilder('earning')
       .innerJoin('earning.agent', 'agent')
       .select('earning.agentId', 'agentId')
@@ -151,8 +153,9 @@ export class AdminEarningsService {
       .groupBy('earning.agentId')
       .addGroupBy('agent.firstName')
       .addGroupBy('agent.lastName')
-      .orderBy('revenue', 'DESC')
-      .getRawMany<{
+      .orderBy('revenue', 'DESC');
+    this.access.restrictAgent(rowsQb, 'agent');
+    const rows = await rowsQb.getRawMany<{
         agentId: string;
         firstName: string;
         lastName: string | null;
@@ -277,13 +280,18 @@ export class AdminEarningsService {
       ),
     ]);
 
-    const revenueRows = await this.earningRepo
+    const revenueQb = this.earningRepo
       .createQueryBuilder('earning')
+      .innerJoin('earning.agent', 'agent')
       .select('earning.agentId', 'agentId')
       .addSelect('COALESCE(SUM(earning.revenueGenerated), 0)', 'revenue')
       .where('earning.earningDate BETWEEN :from AND :to', { from, to })
-      .groupBy('earning.agentId')
-      .getRawMany<{ agentId: string; revenue: string }>();
+      .groupBy('earning.agentId');
+    this.access.restrictAgent(revenueQb, 'agent');
+    const revenueRows = await revenueQb.getRawMany<{
+      agentId: string;
+      revenue: string;
+    }>();
 
     let generated = 0;
     let updated = 0;
@@ -637,6 +645,7 @@ export class AdminEarningsService {
     if (query.to) {
       qb.andWhere('earning.earningDate <= :to', { to: query.to });
     }
+    this.access.restrictAgent(qb, 'agent');
     return qb;
   }
 
@@ -662,6 +671,7 @@ export class AdminEarningsService {
     if (query.status) {
       qb.andWhere('incentive.status = :status', { status: query.status });
     }
+    this.access.restrictAgent(qb, 'agent');
     return qb;
   }
 
@@ -687,6 +697,7 @@ export class AdminEarningsService {
     if (query.status) {
       qb.andWhere('salary.status = :status', { status: query.status });
     }
+    this.access.restrictAgent(qb, 'agent');
     return qb;
   }
 

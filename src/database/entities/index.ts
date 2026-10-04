@@ -4,6 +4,7 @@ export { Customer } from './customer';
 export { Agent } from './agent';
 export type { AgentCurrentLocation } from './agent';
 export { Admin } from './admin';
+export { AdminZone } from './admin-zone';
 export { OtpVerification } from './otp-verification';
 export { RefreshToken } from './refresh-token';
 export { DeviceToken } from './device-token';

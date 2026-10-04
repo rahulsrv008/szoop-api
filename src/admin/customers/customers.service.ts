@@ -14,6 +14,7 @@ import {
 } from 'src/database/entities';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminCustomersDto } from './dto/list-customers.dto';
@@ -49,6 +50,7 @@ export class AdminCustomersService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
     private readonly zones: ZoneResolverService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list(query: ListAdminCustomersDto) {
@@ -330,6 +332,7 @@ export class AdminCustomersService {
         to: new Date(`${query.to}T23:59:59.999Z`),
       });
     }
+    this.access.restrictCustomer(qb, 'customer');
     return qb;
   }
 
@@ -339,6 +342,7 @@ export class AdminCustomersService {
       relations: ['user'],
     });
     if (!customer) throw new NotFoundException('Customer not found');
+    await this.access.assertCustomer(customer.id, customer.homeZoneId);
     return customer;
   }
 

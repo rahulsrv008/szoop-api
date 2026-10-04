@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { SupportTicket } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
@@ -33,6 +34,7 @@ export class AdminSupportService {
     private readonly ticketRepo: Repository<SupportTicket>,
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list(query: ListAdminSupportDto) {
@@ -215,12 +217,30 @@ export class AdminSupportService {
         to: new Date(`${query.to}T23:59:59.999Z`),
       });
     }
+    this.access.restrictSupport(qb);
     return qb;
   }
 
   private async requireTicket(id: string, relations: string[] = []) {
-    const ticket = await this.ticketRepo.findOne({ where: { id }, relations });
+    const ticket = await this.ticketRepo.findOne({
+      where: { id },
+      relations: [
+        ...new Set([
+          ...relations,
+          'booking',
+          'user',
+          'user.customer',
+          'user.agent',
+        ]),
+      ],
+    });
     if (!ticket) throw new NotFoundException('Support ticket not found');
+    this.access.assertSupport({
+      bookingZoneId: ticket.booking?.serviceAreaId,
+      customerZoneId: ticket.user?.customer?.homeZoneId,
+      agentHomeZoneId: ticket.user?.agent?.homeZoneId,
+      agentServiceAreas: ticket.user?.agent?.serviceAreas,
+    });
     return ticket;
   }
 

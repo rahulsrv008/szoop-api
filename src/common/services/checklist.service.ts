@@ -59,15 +59,14 @@ export class ChecklistService implements OnModuleInit {
     progress = this.progressRepo.create({
       bookingId,
       serviceType,
-      currentPhase: 'PRE_SERVICE',
+      currentPhase: 'POST_SERVICE',
       status: 'PENDING',
       completionPercentage: 0,
     });
 
     await this.progressRepo.save(progress);
 
-    // Initialize item progress for PRE_SERVICE phase
-    await this.initializePhaseItems(progress.id, serviceType, 'PRE_SERVICE');
+    await this.initializePhaseItems(progress.id, serviceType, 'POST_SERVICE');
 
     return progress;
   }
@@ -264,10 +263,14 @@ export class ChecklistService implements OnModuleInit {
     // Check if all required items are completed
     const itemProgresses = await this.itemProgressRepo.find({
       where: { checklistProgressId },
-      relations: ['checklistItem'],
+      relations: ['checklistItem', 'checklistItem.checklist'],
     });
 
-    const requiredItems = itemProgresses.filter((ip) => ip.checklistItem.isRequired);
+    const requiredItems = itemProgresses.filter(
+      (ip) =>
+        ip.checklistItem.isRequired &&
+        ip.checklistItem.checklist?.phase === progress.currentPhase,
+    );
     const allRequiredCompleted = requiredItems.every((ip) => ip.isCompleted);
 
     if (!allRequiredCompleted) {

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import {
+  Admin,
   Agent,
   AgentAttendance,
   AgentDocument,
@@ -16,6 +17,7 @@ import { AdminDashboardService } from './dashboard.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
+      Admin,
       Customer,
       Agent,
       AgentDocument,

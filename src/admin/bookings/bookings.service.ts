@@ -14,6 +14,7 @@ import {
 } from 'src/database/entities';
 import { ACTIVE_STATUSES, ASSIGNABLE } from 'src/common/booking/booking-status';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
@@ -67,6 +68,7 @@ export class AdminBookingsService {
     private readonly history: BookingHistoryService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list(query: ListAdminBookingsDto) {
@@ -158,6 +160,7 @@ export class AdminBookingsService {
       ],
     });
     if (!booking) throw new NotFoundException('Booking not found');
+    this.access.assertZone(booking.serviceAreaId, 'Booking');
 
     const trackingPings = await this.locationRepo.count({
       where: { bookingId: id },
@@ -527,6 +530,7 @@ export class AdminBookingsService {
     if (query.to) {
       qb.andWhere('booking.bookingDate <= :to', { to: query.to });
     }
+    this.access.restrictZoneColumn(qb, 'booking.service_area_id');
     return qb;
   }
 
@@ -536,6 +540,7 @@ export class AdminBookingsService {
       relations: ['customer'],
     });
     if (!booking) throw new NotFoundException('Booking not found');
+    this.access.assertZone(booking.serviceAreaId, 'Booking');
     return booking;
   }
 

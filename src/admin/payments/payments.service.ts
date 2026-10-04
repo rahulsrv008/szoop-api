@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { Payment } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminPaymentsDto } from './dto/list-payments.dto';
 
@@ -25,6 +26,7 @@ export class AdminPaymentsService {
   constructor(
     @InjectRepository(Payment)
     private readonly paymentRepo: Repository<Payment>,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list(query: ListAdminPaymentsDto) {
@@ -111,6 +113,7 @@ export class AdminPaymentsService {
       relations: ['booking', 'customer', 'customer.user', 'transactions'],
     });
     if (!payment) throw new NotFoundException('Payment not found');
+    this.access.assertZone(payment.booking?.serviceAreaId, 'Payment');
 
     return {
       id: payment.id,
@@ -193,6 +196,7 @@ export class AdminPaymentsService {
         to: new Date(`${query.to}T23:59:59.999Z`),
       });
     }
+    this.access.restrictZoneColumn(qb, 'booking.service_area_id');
     return qb;
   }
 

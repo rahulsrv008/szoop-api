@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -10,6 +11,7 @@ import { HealthModule } from './health/health.module';
 import { CustomerModule } from './customer/customer.module';
 import { AgentModule } from './agent/agent.module';
 import { AdminModule } from './admin/admin.module';
+import { AdminAccessInterceptor } from './common/auth/admin-access.interceptor';
 
 @Module({
   imports: [
@@ -33,6 +35,9 @@ import { AdminModule } from './admin/admin.module';
     AdminModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    { provide: APP_INTERCEPTOR, useClass: AdminAccessInterceptor },
+  ],
 })
 export class AppModule {}

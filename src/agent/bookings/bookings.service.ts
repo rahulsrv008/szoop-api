@@ -15,7 +15,7 @@ import {
   MoreThanOrEqual,
   Repository,
 } from 'typeorm';
-import { AgentEarning, AgentLocation, Booking, BookingItem, BookingStatusHistory, BookingVisit, CustomerAddress, ServicePricing } from 'src/database/entities';
+import { Agent, AgentEarning, AgentLocation, Booking, BookingItem, BookingStatusHistory, BookingVisit, CustomerAddress, ServicePricing } from 'src/database/entities';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import {
@@ -113,7 +113,7 @@ export class AgentBookingsService {
       return paginated(withDistance, total, query);
     }
 
-    const matched = await this.filterAvailableJobs(agent.id, items);
+    const matched = await this.filterAvailableJobs(agent, items, rows);
     return paginated(matched, matched.length, query);
   }
 
@@ -551,8 +551,9 @@ export class AgentBookingsService {
   }
 
   /**
-   * Open pool is filtered by verified skills, then by last-known location vs
-   * the 3 km (or 5 km boosted) radius. Jobs without coordinates stay visible.
+   * Open pool is filtered by verified skills, then by the agent's assigned
+   * service areas. Outside those areas, last-known GPS still limits the list
+   * to the 3 km (or 5 km boosted) radius. Jobs without coordinates stay visible.
    */
   private async filterAvailableJobs<
     T extends {
@@ -561,8 +562,14 @@ export class AgentBookingsService {
       planType: Booking['planType'];
       address: { latitude?: number | null; longitude?: number | null } | null;
     },
-  >(agentId: string, jobs: T[]) {
-    const match = await this.skills.matchingContext(agentId);
+  >(agent: Agent, jobs: T[], bookings: Booking[]) {
+    const match = await this.skills.matchingContext(agent.id);
+    const zones = new Set(
+      [...(agent.serviceAreas ?? []), agent.homeZoneId].filter(
+        (id): id is string => !!id,
+      ),
+    );
+    const areaOf = new Map(bookings.map((booking) => [booking.id, booking.serviceAreaId]));
     // On Demand is general help by the hour, so any approved agent can take it.
     const bySkill = jobs.filter(
       (job) =>
@@ -570,11 +577,12 @@ export class AgentBookingsService {
         job.services.some((name) => matchesSkill(name, match.keywords)),
     );
 
-    const withDistance = await this.annotateDistanceKm(agentId, bySkill);
-    return withDistance.filter(
-      (job) =>
-        job.distanceKm == null || job.distanceKm <= match.serviceRadiusKm,
-    );
+    const withDistance = await this.annotateDistanceKm(agent.id, bySkill);
+    return withDistance.filter((job) => {
+      const areaId = areaOf.get(job.id);
+      if (areaId && zones.has(areaId)) return true;
+      return job.distanceKm == null || job.distanceKm <= match.serviceRadiusKm;
+    });
   }
 
   /** Attaches straight-line distance (km) from the agent's last known GPS ping to each job's address. */

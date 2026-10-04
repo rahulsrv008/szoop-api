@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
+  Admin,
   Agent,
   AgentAttendance,
   AgentDocument,
@@ -11,6 +12,7 @@ import {
   Rating,
   SupportTicket,
 } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { ACTIVE_STATUSES } from 'src/common/booking/booking-status';
 import { AdminDashboardQueryDto } from './dto/dashboard-query.dto';
 
@@ -24,6 +26,7 @@ function isoDate(value: Date) {
 @Injectable()
 export class AdminDashboardService {
   constructor(
+    @InjectRepository(Admin) private readonly adminRepo: Repository<Admin>,
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
     @InjectRepository(Agent) private readonly agentRepo: Repository<Agent>,
@@ -38,12 +41,13 @@ export class AdminDashboardService {
     @InjectRepository(Rating) private readonly ratingRepo: Repository<Rating>,
     @InjectRepository(SupportTicket)
     private readonly ticketRepo: Repository<SupportTicket>,
+    private readonly access: AdminAccessService,
   ) {}
 
   async overview(query: AdminDashboardQueryDto) {
     const range = this.resolveRange(query);
 
-    const [customers, agents, bookings, revenue, ratings, support, kyc] =
+    const [customers, agents, bookings, revenue, ratings, support, kyc, team] =
       await Promise.all([
         this.customerStats(range),
         this.agentStats(range),
@@ -52,6 +56,7 @@ export class AdminDashboardService {
         this.ratingStats(),
         this.supportStats(),
         this.kycStats(),
+        this.teamEarnings(range),
       ]);
 
     return {
@@ -63,38 +68,106 @@ export class AdminDashboardService {
       ratings,
       support,
       kyc,
+      team,
     };
   }
 
+  /** Staff accounts and the paid revenue collected in the zones assigned to them. */
+  private async teamEarnings(range: ResolvedRange) {
+    const access = this.access.current();
+    const admins = await this.adminRepo.find({
+      where: { isActive: true },
+      order: { firstName: 'ASC', email: 'ASC' },
+    });
+    const zoneMap = await this.access.zonesFor(admins.map((admin) => admin.id));
+
+    const earningQb = this.paymentRepo
+      .createQueryBuilder('payment')
+      .innerJoin('payment.booking', 'booking')
+      .select('booking.service_area_id', 'zoneId')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'earnings')
+      .where('payment.paymentStatus = :status', { status: 'PAID' })
+      .andWhere('payment.paidAt BETWEEN :start AND :end', {
+        start: range.start,
+        end: range.end,
+      })
+      .groupBy('booking.service_area_id');
+    this.access.restrictZoneColumn(earningQb, 'booking.service_area_id');
+    const earningRows = await earningQb.getRawMany<{
+      zoneId: string | null;
+      earnings: string;
+    }>();
+    const byZone = new Map(
+      earningRows
+        .filter((row) => row.zoneId)
+        .map((row) => [row.zoneId as string, Number(row.earnings)]),
+    );
+    const visibleTotal = [...byZone.values()].reduce((sum, amount) => sum + amount, 0);
+
+    return admins
+      .map((admin) => {
+        const zones = zoneMap.get(admin.id) ?? [];
+        const unrestricted = admin.role === 'SUPER_ADMIN';
+        const earnings = unrestricted
+          ? visibleTotal
+          : zones.reduce((sum, zone) => sum + (byZone.get(zone.id) ?? 0), 0);
+        return {
+          id: admin.id,
+          name:
+            [admin.firstName, admin.lastName].filter(Boolean).join(' ').trim() ||
+            admin.email,
+          email: admin.email,
+          role: admin.role,
+          unrestricted,
+          zones: unrestricted
+            ? []
+            : zones.map((zone) => ({ id: zone.id, name: zone.name, city: zone.city })),
+          earnings,
+        };
+      })
+      .filter((person) => {
+        if (access.unrestricted) return true;
+        if (person.id === access.adminId) return true;
+        return person.zones.some((zone) => access.zoneIds.includes(zone.id));
+      })
+      .sort((a, b) => b.earnings - a.earnings);
+  }
+
   private async customerStats(range: ResolvedRange) {
+    const totalQb = this.customerRepo.createQueryBuilder('customer');
+    const newQb = this.customerRepo
+      .createQueryBuilder('customer')
+      .where('customer.createdAt BETWEEN :start AND :end', {
+        start: range.start,
+        end: range.end,
+      });
+    const blockedQb = this.customerRepo
+      .createQueryBuilder('customer')
+      .innerJoin('customer.user', 'user')
+      .where('user.isActive = false');
+    this.access.restrictCustomer(totalQb, 'customer');
+    this.access.restrictCustomer(newQb, 'customer');
+    this.access.restrictCustomer(blockedQb, 'customer');
+
     const [total, newInRange, blocked] = await Promise.all([
-      this.customerRepo.count(),
-      this.customerRepo
-        .createQueryBuilder('customer')
-        .where('customer.createdAt BETWEEN :start AND :end', {
-          start: range.start,
-          end: range.end,
-        })
-        .getCount(),
-      this.customerRepo
-        .createQueryBuilder('customer')
-        .innerJoin('customer.user', 'user')
-        .where('user.isActive = false')
-        .getCount(),
+      totalQb.getCount(),
+      newQb.getCount(),
+      blockedQb.getCount(),
     ]);
 
     return { total, newInRange, blocked };
   }
 
   private async agentStats(range: ResolvedRange) {
-    const statusRows = await this.agentRepo
+    const statusQb = this.agentRepo
       .createQueryBuilder('agent')
       .select('agent.approvalStatus', 'approvalStatus')
       .addSelect('agent.status', 'status')
       .addSelect('COUNT(*)::int', 'count')
       .groupBy('agent.approvalStatus')
-      .addGroupBy('agent.status')
-      .getRawMany<{
+      .addGroupBy('agent.status');
+    this.access.restrictAgent(statusQb, 'agent');
+    const statusRows = await statusQb.getRawMany<{
         approvalStatus: string;
         status: string;
         count: number;
@@ -107,12 +180,14 @@ export class AdminDashboardService {
         .filter(predicate)
         .reduce((total, row) => total + Number(row.count), 0);
 
-    const onlineToday = await this.attendanceRepo
+    const onlineQb = this.attendanceRepo
       .createQueryBuilder('attendance')
+      .innerJoin('attendance.agent', 'agent')
       .select('COUNT(DISTINCT attendance.agentId)::int', 'count')
       .where('attendance.attendanceDate = :today', { today: range.today })
-      .andWhere('attendance.checkIn IS NOT NULL')
-      .getRawOne<{ count: number }>();
+      .andWhere('attendance.checkIn IS NOT NULL');
+    this.access.restrictAgent(onlineQb, 'agent');
+    const onlineToday = await onlineQb.getRawOne<{ count: number }>();
 
     return {
       total: sumWhere(() => true),
@@ -124,32 +199,35 @@ export class AdminDashboardService {
   }
 
   private async bookingStats(range: ResolvedRange) {
-    const statusRows = await this.bookingRepo
+    const statusQb = this.bookingRepo
       .createQueryBuilder('booking')
       .select('booking.status', 'status')
       .addSelect('COUNT(*)::int', 'count')
-      .groupBy('booking.status')
-      .getRawMany<{ status: string; count: number }>();
+      .groupBy('booking.status');
+    this.access.restrictZoneColumn(statusQb, 'booking.service_area_id');
+    const statusRows = await statusQb.getRawMany<{ status: string; count: number }>();
 
     const byStatus = statusRows.reduce<Record<string, number>>((acc, row) => {
       acc[row.status] = Number(row.count);
       return acc;
     }, {});
 
+    const inRangeQb = this.bookingRepo
+      .createQueryBuilder('booking')
+      .where('booking.bookingDate BETWEEN :from AND :to', {
+        from: range.from,
+        to: range.to,
+      });
+    const activeQb = this.bookingRepo
+      .createQueryBuilder('booking')
+      .where('booking.status IN (:...statuses)', {
+        statuses: ACTIVE_STATUSES,
+      });
+    this.access.restrictZoneColumn(inRangeQb, 'booking.service_area_id');
+    this.access.restrictZoneColumn(activeQb, 'booking.service_area_id');
     const [inRange, activeNow] = await Promise.all([
-      this.bookingRepo
-        .createQueryBuilder('booking')
-        .where('booking.bookingDate BETWEEN :from AND :to', {
-          from: range.from,
-          to: range.to,
-        })
-        .getCount(),
-      this.bookingRepo
-        .createQueryBuilder('booking')
-        .where('booking.status IN (:...statuses)', {
-          statuses: ACTIVE_STATUSES,
-        })
-        .getCount(),
+      inRangeQb.getCount(),
+      activeQb.getCount(),
     ]);
 
     return {
@@ -164,32 +242,42 @@ export class AdminDashboardService {
     const collected = (from?: Date) => {
       const qb = this.paymentRepo
         .createQueryBuilder('payment')
+        .innerJoin('payment.booking', 'booking')
         .select('COALESCE(SUM(payment.amount), 0)', 'total')
         .where('payment.paymentStatus = :status', { status: 'PAID' });
       if (from) {
         qb.andWhere('payment.paidAt >= :from', { from });
       }
+      this.access.restrictZoneColumn(qb, 'booking.service_area_id');
       return qb.getRawOne<{ total: string }>();
     };
 
     const [today, inRange, thisMonth, lifetime, pending] = await Promise.all([
       collected(range.startOfToday),
-      this.paymentRepo
-        .createQueryBuilder('payment')
-        .select('COALESCE(SUM(payment.amount), 0)', 'total')
-        .where('payment.paymentStatus = :status', { status: 'PAID' })
-        .andWhere('payment.paidAt BETWEEN :start AND :end', {
-          start: range.start,
-          end: range.end,
-        })
-        .getRawOne<{ total: string }>(),
+      (() => {
+        const qb = this.paymentRepo
+          .createQueryBuilder('payment')
+          .innerJoin('payment.booking', 'booking')
+          .select('COALESCE(SUM(payment.amount), 0)', 'total')
+          .where('payment.paymentStatus = :status', { status: 'PAID' })
+          .andWhere('payment.paidAt BETWEEN :start AND :end', {
+            start: range.start,
+            end: range.end,
+          });
+        this.access.restrictZoneColumn(qb, 'booking.service_area_id');
+        return qb.getRawOne<{ total: string }>();
+      })(),
       collected(range.startOfMonth),
       collected(),
-      this.paymentRepo
-        .createQueryBuilder('payment')
-        .select('COALESCE(SUM(payment.amount), 0)', 'total')
-        .where('payment.paymentStatus = :status', { status: 'PENDING' })
-        .getRawOne<{ total: string }>(),
+      (() => {
+        const qb = this.paymentRepo
+          .createQueryBuilder('payment')
+          .innerJoin('payment.booking', 'booking')
+          .select('COALESCE(SUM(payment.amount), 0)', 'total')
+          .where('payment.paymentStatus = :status', { status: 'PENDING' });
+        this.access.restrictZoneColumn(qb, 'booking.service_area_id');
+        return qb.getRawOne<{ total: string }>();
+      })(),
     ]);
 
     return {
@@ -202,11 +290,13 @@ export class AdminDashboardService {
   }
 
   private async ratingStats() {
-    const row = await this.ratingRepo
+    const ratingQb = this.ratingRepo
       .createQueryBuilder('rating')
+      .innerJoin('rating.booking', 'booking')
       .select('COALESCE(AVG(rating.rating), 0)', 'average')
-      .addSelect('COUNT(*)::int', 'count')
-      .getRawOne<{ average: string; count: number }>();
+      .addSelect('COUNT(*)::int', 'count');
+    this.access.restrictZoneColumn(ratingQb, 'booking.service_area_id');
+    const row = await ratingQb.getRawOne<{ average: string; count: number }>();
 
     return {
       average: Number(Number(row?.average ?? 0).toFixed(2)),
@@ -215,14 +305,23 @@ export class AdminDashboardService {
   }
 
   private async supportStats() {
-    const rows = await this.ticketRepo
+    const ticketQb = this.ticketRepo
       .createQueryBuilder('ticket')
+      .innerJoin('ticket.user', 'user')
+      .leftJoin('user.customer', 'customer')
+      .leftJoin('user.agent', 'agent')
+      .leftJoin('ticket.booking', 'booking')
       .select('ticket.status', 'status')
       .addSelect('ticket.priority', 'priority')
       .addSelect('COUNT(*)::int', 'count')
       .groupBy('ticket.status')
-      .addGroupBy('ticket.priority')
-      .getRawMany<{ status: string; priority: string; count: number }>();
+      .addGroupBy('ticket.priority');
+    this.access.restrictSupport(ticketQb);
+    const rows = await ticketQb.getRawMany<{
+      status: string;
+      priority: string;
+      count: number;
+    }>();
 
     const sumWhere = (
       predicate: (row: { status: string; priority: string }) => boolean,
@@ -244,10 +343,12 @@ export class AdminDashboardService {
   }
 
   private async kycStats() {
-    const pendingDocuments = await this.documentRepo
+    const documentQb = this.documentRepo
       .createQueryBuilder('document')
-      .where('document.verificationStatus = :status', { status: 'PENDING' })
-      .getCount();
+      .innerJoin('document.agent', 'agent')
+      .where('document.verificationStatus = :status', { status: 'PENDING' });
+    this.access.restrictAgent(documentQb, 'agent');
+    const pendingDocuments = await documentQb.getCount();
 
     return { pendingDocuments };
   }
