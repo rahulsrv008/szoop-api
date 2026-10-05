@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Agent, AgentLocation, Booking } from 'src/database/entities';
 import { ACTIVE_STATUSES } from 'src/common/booking/booking-status';
+import { h3CellOf } from 'src/common/geo/geo.util';
 import { AgentContextService } from '../shared/agent-context.service';
 import { CreateAgentLocationDto } from './dto/create-location.dto';
 
@@ -51,6 +52,7 @@ export class AgentLocationService {
       longitude: dto.longitude,
       recordedAt: ping.recordedAt.toISOString(),
     };
+    agent.currentH3Cell = h3CellOf(dto.latitude, dto.longitude);
     await this.agentRepo.save(agent);
 
     return this.toResponse(ping);

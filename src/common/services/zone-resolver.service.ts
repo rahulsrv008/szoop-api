@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, IsNull, Repository } from 'typeorm';
+import { backfillH3Cells } from 'src/common/geo/h3-backfill';
 import {
   Agent,
   Customer,
@@ -25,6 +26,16 @@ CREATE INDEX IF NOT EXISTS idx_agents_home_zone ON agents (home_zone);
 CREATE INDEX IF NOT EXISTS idx_customers_home_zone ON customers (home_zone);
 CREATE INDEX IF NOT EXISTS idx_customer_addresses_service_area
   ON customer_addresses (service_area_id);
+
+-- H3 geo index for agent <-> job matching (mirrors sql/dispatch_geo.sql).
+ALTER TABLE customer_addresses ADD COLUMN IF NOT EXISTS h3_cell VARCHAR(16);
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS current_h3_cell VARCHAR(16);
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS home_h3_cell VARCHAR(16);
+CREATE INDEX IF NOT EXISTS idx_customer_addresses_h3_cell ON customer_addresses (h3_cell);
+CREATE INDEX IF NOT EXISTS idx_agents_current_h3_cell ON agents (current_h3_cell);
+CREATE INDEX IF NOT EXISTS idx_agents_home_h3_cell ON agents (home_h3_cell);
+CREATE INDEX IF NOT EXISTS idx_agent_locations_agent_recorded
+  ON agent_locations (agent_id, recorded_at DESC);
 `;
 
 export interface ZoneLookup {
@@ -66,6 +77,13 @@ export class ZoneResolverService implements OnModuleInit {
       await this.backfill();
     } catch (err) {
       this.logger.error('Failed to ensure agent/customer zone columns', err as Error);
+    }
+    try {
+      const filled = await backfillH3Cells(this.dataSource);
+      const total = filled.addresses + filled.agentLocations + filled.agentHomes;
+      if (total) this.logger.log(`Backfilled H3 cells: ${JSON.stringify(filled)}`);
+    } catch (err) {
+      this.logger.error('Failed to backfill H3 cells', err as Error);
     }
   }
 

@@ -1,0 +1,637 @@
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import {
+  Brackets,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  MoreThan,
+  Not,
+  Repository,
+} from 'typeorm';
+import {
+  Agent,
+  Booking,
+  BookingDispatch,
+  BookingOffer,
+} from 'src/database/entities';
+import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
+import { BookingHistoryService } from 'src/common/booking/booking-history.service';
+import { todayString } from 'src/agent/shared/date.util';
+import { h3CellsWithinKm } from 'src/common/geo/geo.util';
+import { AgentSkillsService } from 'src/agent/skills/skills.service';
+import { EligibilityService, pairKey } from './eligibility.service';
+import { DISPATCH_SCHEMA_SQL } from './dispatch.schema';
+import {
+  DISPATCH_WAVES,
+  EXHAUSTED_RETRY_MINUTES,
+  NEAR_TERM_MINUTES,
+  NO_SHOW_GRACE_MINUTES,
+  OFFER_TTL_SECONDS,
+  RELEASABLE_STATUSES,
+  agentBase,
+  canReachInTime,
+  distanceKm,
+  hasSkillFor,
+  minutesUntil,
+  serviceNames,
+  servesZone,
+} from './dispatch.rules';
+
+/** A tick holds a booking this long, so a second instance (or a kick) can't send the same wave twice. */
+const LEASE_SECONDS = 30;
+
+/** Bookings advanced per tick; the rest wait for the next one. */
+const TICK_BATCH_SIZE = 50;
+
+/** Default in-process tick interval. Vercel can't run timers, so there it's off and a cron calls the endpoint. */
+const DEFAULT_TICK_MS = 15_000;
+
+/** Wave number used for the one extra chance given to agents who let an offer lapse. */
+const RETRY_WAVE = DISPATCH_WAVES.length + 1;
+
+type Candidate = { agent: Agent; distanceKm: number | null; live: boolean };
+
+/**
+ * Push dispatch: when a job opens, offer it to the nearest eligible agents
+ * in waves of widening radius. Each offer lives OFFER_TTL_SECONDS; when a
+ * wave is declined or times out, the next wave goes out. First accept wins
+ * (the conditional claim in AgentBookingsService.accept). If every wave runs
+ * dry the job stays in the open pool and is re-checked every few minutes.
+ *
+ * All state is in booking_dispatches / booking_offers, so any instance — the
+ * in-process timer, the cron endpoint, or a kick from a request — can drive it.
+ */
+@Injectable()
+export class DispatchService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(DispatchService.name);
+  private timer: NodeJS.Timeout | null = null;
+  private ticking = false;
+
+  constructor(
+    @InjectRepository(Booking)
+    private readonly bookingRepo: Repository<Booking>,
+    @InjectRepository(BookingDispatch)
+    private readonly dispatchRepo: Repository<BookingDispatch>,
+    @InjectRepository(BookingOffer)
+    private readonly offerRepo: Repository<BookingOffer>,
+    @InjectRepository(Agent)
+    private readonly agentRepo: Repository<Agent>,
+    private readonly eligibility: EligibilityService,
+    private readonly skills: AgentSkillsService,
+    private readonly notifications: NotificationDispatchService,
+    private readonly history: BookingHistoryService,
+  ) {}
+
+  async onModuleInit() {
+    try {
+      await this.bookingRepo.query(DISPATCH_SCHEMA_SQL);
+    } catch (err) {
+      // Without its tables every tick would fail; say so once instead of every 15 s.
+      this.logger.error('Failed to ensure dispatch tables; push dispatch is off', err as Error);
+      return;
+    }
+    const intervalMs = tickIntervalMs();
+    if (!intervalMs) return;
+    this.timer = setInterval(() => {
+      this.tick().catch((err) =>
+        this.logger.error('Dispatch tick failed', err as Error),
+      );
+    }, intervalMs);
+    this.timer.unref();
+  }
+
+  onModuleDestroy() {
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  /** One pass: settle offers on jobs that closed elsewhere, then advance every booking that's due. */
+  async tick() {
+    if (this.ticking) return { processed: 0 };
+    this.ticking = true;
+    try {
+      await this.settleClosedJobs();
+      await this.releaseOrphanedJobs();
+      await this.releaseNoShows();
+
+      const due: { id: string }[] = await this.bookingRepo
+        .createQueryBuilder('booking')
+        .leftJoin(BookingDispatch, 'dispatch', 'dispatch.bookingId = booking.id')
+        .select('booking.id', 'id')
+        .where("booking.status = 'paid'")
+        .andWhere('booking.agentId IS NULL')
+        .andWhere(
+          new Brackets((due) =>
+            due
+              .where('dispatch.bookingId IS NULL')
+              // Held by an agent before, released back to the pool since.
+              .orWhere("dispatch.status = 'assigned'")
+              .orWhere(
+                "dispatch.status IN ('searching', 'exhausted') AND dispatch.nextActionAt <= now()",
+              ),
+          ),
+        )
+        .orderBy('booking.bookingDate', 'ASC')
+        .addOrderBy('booking.startTime', 'ASC')
+        .limit(TICK_BATCH_SIZE)
+        .getRawMany();
+
+      for (const { id } of due) {
+        await this.advance(id).catch((err) =>
+          this.logger.error(`Dispatch failed for booking ${id}`, err as Error),
+        );
+      }
+      return { processed: due.length };
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  /**
+   * Start (or restart) dispatch for an open job right away instead of waiting
+   * for the next tick. Never throws — callers are payment/booking flows.
+   */
+  async kick(bookingId: string) {
+    try {
+      await this.dispatchRepo
+        .createQueryBuilder()
+        .insert()
+        .values({ bookingId, status: 'searching', wave: 0, nextActionAt: () => 'now()' })
+        .orUpdate(['status', 'next_action_at'], ['booking_id'])
+        .execute();
+      await this.advance(bookingId);
+    } catch (err) {
+      this.logger.error(`Dispatch kick failed for booking ${bookingId}`, err as Error);
+    }
+  }
+
+  /** The agent claimed the job (offered or from the open pool): their offer wins, the rest are withdrawn. */
+  async onAccepted(bookingId: string, agentId: string) {
+    const now = new Date();
+    await this.offerRepo.update(
+      { bookingId, agentId, status: 'pending' },
+      { status: 'accepted', respondedAt: now },
+    );
+    await this.offerRepo.update(
+      { bookingId, status: 'pending' },
+      { status: 'cancelled', respondedAt: now },
+    );
+    await this.dispatchRepo.update({ bookingId }, { status: 'assigned', nextActionAt: null });
+  }
+
+  /**
+   * The agent passed on the job, or released one they held: never offer it to
+   * them again, and move on straight away if nobody else is still deciding.
+   */
+  async onDeclined(
+    bookingId: string,
+    agentId: string,
+    outcome: 'declined' | 'released' = 'declined',
+  ) {
+    const now = new Date();
+    await this.excludeAgent(bookingId, agentId, outcome);
+
+    const deciding = await this.offerRepo.count({
+      where: { bookingId, status: 'pending', expiresAt: MoreThan(now) },
+    });
+    if (!deciding) await this.kick(bookingId);
+  }
+
+  /**
+   * The job moved to a new slot: offers made for the old time no longer mean
+   * anything, so withdraw them and start over from wave 1. Agents who
+   * explicitly declined stay excluded; everyone else can be asked again.
+   */
+  async onRescheduled(bookingId: string) {
+    await this.offerRepo.delete({
+      bookingId,
+      status: In(['pending', 'expired', 'cancelled']),
+    });
+    await this.dispatchRepo.update({ bookingId }, { wave: 0 });
+    await this.kick(bookingId);
+  }
+
+  /**
+   * Takes a job back from its agent before work starts — no-show, suspension,
+   * or a new time they can't make — and puts it straight back into dispatch.
+   * That agent won't be offered it again. Returns false if nothing changed.
+   */
+  async release(bookingId: string, reason: string) {
+    const booking = await this.bookingRepo.findOne({
+      where: { id: bookingId },
+      relations: ['customer', 'agent'],
+    });
+    const agentId = booking?.agentId;
+    if (!booking || !agentId || !RELEASABLE_STATUSES.includes(booking.status)) {
+      return false;
+    }
+
+    // Conditional, so a concurrent start/complete by the agent wins.
+    const released = await this.bookingRepo.update(
+      { id: bookingId, agentId, status: In(RELEASABLE_STATUSES) },
+      { agentId: null, status: 'paid' },
+    );
+    if (!released.affected) return false;
+
+    await this.history.record(bookingId, 'paid', null, `Released from agent: ${reason}`);
+    await this.excludeAgent(bookingId, agentId, 'released');
+
+    const data = { bookingId, bookingNumber: booking.bookingNumber };
+    const notices = [
+      booking.agent &&
+        this.notifications.toUser(booking.agent.userId, {
+          title: 'Job removed',
+          message: `Booking ${booking.bookingNumber} is no longer assigned to you: ${reason}.`,
+          type: 'booking_released',
+          data,
+        }),
+      booking.customer &&
+        this.notifications.toUser(booking.customer.userId, {
+          title: 'Finding you a new expert',
+          message: `Your expert can't make booking ${booking.bookingNumber}, so we're finding someone else.`,
+          type: 'booking_released',
+          data,
+        }),
+    ];
+    await Promise.all(
+      notices.map((notice) =>
+        notice?.catch((err) =>
+          this.logger.error(`Release notice failed for ${bookingId}`, err as Error),
+        ),
+      ),
+    );
+
+    await this.kick(bookingId);
+    return true;
+  }
+
+  /** Jobs this agent gave back (or no-showed) within the last `days`. */
+  recentReleases(agentId: string, days: number) {
+    return this.offerRepo.count({
+      where: {
+        agentId,
+        status: 'released',
+        respondedAt: MoreThan(new Date(Date.now() - days * 24 * 3600_000)),
+      },
+    });
+  }
+
+  /** Live offers for this agent, by booking id → expiry. */
+  async pendingOffers(agentId: string) {
+    const offers = await this.offerRepo.find({
+      where: { agentId, status: 'pending', expiresAt: MoreThan(new Date()) },
+    });
+    return new Map(offers.map((offer) => [offer.bookingId, offer.expiresAt]));
+  }
+
+  /**
+   * Approved agents who could take this job within `radiusKm`, nearest first.
+   * Distance is from a fresh GPS fix, else the agent's home; zone agents with
+   * neither come last. For a job starting soon, only agents with a live fix
+   * who can actually get there in time qualify.
+   */
+  async candidates(
+    booking: Booking,
+    radiusKm: number,
+    excludeAgentIds: string[] = [],
+    nextStart?: Date,
+  ) {
+    const start =
+      nextStart ?? (await this.eligibility.nextStarts([booking])).get(booking.id);
+    if (!start) return [];
+    // A late job (released no-show) still needs someone who can get there fast.
+    const minutesToStart = Math.max(0, minutesUntil(start));
+    const nearTerm = minutesToStart < NEAR_TERM_MINUTES;
+
+    const zoneId = booking.serviceAreaId;
+    const cells = h3CellsWithinKm(
+      booking.address?.latitude,
+      booking.address?.longitude,
+      radiusKm,
+    );
+    if (!cells.length && !zoneId) return [];
+
+    const query = this.agentRepo
+      .createQueryBuilder('agent')
+      .where("agent.approvalStatus = 'APPROVED'")
+      .andWhere("agent.status <> 'SUSPENDED'")
+      .andWhere(
+        new Brackets((near) => {
+          if (cells.length) {
+            near.orWhere(
+              '(agent.currentH3Cell IN (:...cells) OR agent.homeH3Cell IN (:...cells))',
+              { cells },
+            );
+          }
+          if (zoneId) {
+            near.orWhere(
+              '(agent.homeZoneId = :zoneId OR CAST(:zoneId AS uuid) = ANY(agent.serviceAreas))',
+              { zoneId },
+            );
+          }
+        }),
+      );
+    if (excludeAgentIds.length) {
+      query.andWhere('agent.id NOT IN (:...excludeAgentIds)', { excludeAgentIds });
+    }
+    const agents = await query.getMany();
+
+    // The H3 cells were a superset: the exact radius decides, unless the
+    // agent covers the booking's zone anyway.
+    const contexts = await this.skills.matchingContexts(agents.map((agent) => agent.id));
+    const reachable: Candidate[] = agents
+      .map((agent) => {
+        const base = agentBase(agent);
+        return {
+          agent,
+          live: base?.live ?? false,
+          distanceKm: distanceKm(base?.point ?? null, booking.address),
+        };
+      })
+      .filter(
+        ({ agent, distanceKm: km }) =>
+          servesZone(agent, zoneId) || (km !== null && km <= radiusKm),
+      )
+      .filter(
+        ({ live, distanceKm: km }) =>
+          !nearTerm || (live && km !== null && canReachInTime(km, minutesToStart)),
+      )
+      .filter(({ agent }) =>
+        hasSkillFor(booking, contexts.get(agent.id)?.keywords ?? []),
+      );
+
+    const blocked = await this.eligibility.conflictPairs(
+      reachable.map(({ agent }) => agent.id),
+      [booking],
+    );
+    return reachable
+      .filter(({ agent }) => !blocked.has(pairKey(agent.id, booking.id)))
+      .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
+  }
+
+  /** Moves one booking's dispatch forward: wait on live offers, send the next wave, or give up for now. */
+  private async advance(bookingId: string) {
+    await this.dispatchRepo
+      .createQueryBuilder()
+      .insert()
+      .values({ bookingId, status: 'searching', wave: 0, nextActionAt: () => 'now()' })
+      .orIgnore()
+      .execute();
+
+    const lease = await this.dispatchRepo
+      .createQueryBuilder()
+      .update()
+      .set({ nextActionAt: () => `now() + interval '${LEASE_SECONDS} seconds'` })
+      .where('booking_id = :bookingId', { bookingId })
+      .andWhere(
+        "(status = 'assigned' OR (status IN ('searching', 'exhausted') AND (next_action_at IS NULL OR next_action_at <= now())))",
+      )
+      .returning(['status', 'wave'])
+      .execute();
+    if (!lease.affected) return;
+    const state = (lease.raw as Pick<BookingDispatch, 'status' | 'wave'>[])[0];
+
+    const booking = await this.bookingRepo.findOne({
+      where: { id: bookingId },
+      relations: ['address', 'items', 'items.service'],
+    });
+    const now = new Date();
+    if (!booking || booking.status !== 'paid' || booking.agentId) {
+      await this.settle(bookingId, booking);
+      return;
+    }
+    const nextStart = (await this.eligibility.nextStarts([booking], now)).get(bookingId);
+    if (!nextStart) {
+      await this.close(bookingId);
+      return;
+    }
+
+    const offers = await this.offerRepo.find({ where: { bookingId } });
+    const overdue = offers.filter(
+      (offer) => offer.status === 'pending' && offer.expiresAt <= now,
+    );
+    if (overdue.length) {
+      await this.offerRepo.update(
+        { id: In(overdue.map((offer) => offer.id)) },
+        { status: 'expired' },
+      );
+      for (const offer of overdue) offer.status = 'expired';
+    }
+    const live = offers.filter(
+      (offer) => offer.status === 'pending' && offer.expiresAt > now,
+    );
+    if (live.length) {
+      const firstExpiry = Math.min(...live.map((offer) => offer.expiresAt.getTime()));
+      await this.dispatchRepo.update(
+        { bookingId },
+        { status: 'searching', nextActionAt: new Date(firstExpiry) },
+      );
+      return;
+    }
+
+    // Everyone already asked (or who passed) is out. An exhausted job re-runs
+    // the widest wave for agents who came online since, and gives those who
+    // let an offer lapse (or had it withdrawn) one more chance — never a third.
+    const retrying = state.status === 'exhausted';
+    const askAgain = retrying
+      ? offers.filter(
+          (offer) =>
+            ['expired', 'cancelled'].includes(offer.status) &&
+            offer.wave < RETRY_WAVE,
+        )
+      : [];
+    const asked = offers
+      .filter((offer) => !askAgain.includes(offer))
+      .map((offer) => offer.agentId);
+    const waves = retrying
+      ? [{ wave: RETRY_WAVE, ...DISPATCH_WAVES[DISPATCH_WAVES.length - 1] }]
+      : DISPATCH_WAVES.map((spec, index) => ({ wave: index + 1, ...spec })).slice(
+          state.wave,
+        );
+
+    for (const { wave, radiusKm, size } of waves) {
+      const picks = (await this.candidates(booking, radiusKm, asked, nextStart)).slice(
+        0,
+        size,
+      );
+      if (!picks.length) continue;
+
+      const again = picks.filter((pick) =>
+        askAgain.some((offer) => offer.agentId === pick.agent.id),
+      );
+      if (again.length) {
+        await this.offerRepo.delete({
+          bookingId,
+          agentId: In(again.map((pick) => pick.agent.id)),
+        });
+      }
+
+      const expiresAt = new Date(now.getTime() + OFFER_TTL_SECONDS * 1000);
+      await this.offerRepo
+        .createQueryBuilder()
+        .insert()
+        .values(
+          picks.map((pick) => ({
+            bookingId,
+            agentId: pick.agent.id,
+            wave,
+            status: 'pending' as const,
+            distanceKm: pick.distanceKm === null ? null : pick.distanceKm.toFixed(2),
+            expiresAt,
+          })),
+        )
+        .orIgnore()
+        .execute();
+      await this.dispatchRepo.update(
+        { bookingId },
+        {
+          status: 'searching',
+          wave: Math.min(wave, DISPATCH_WAVES.length),
+          nextActionAt: expiresAt,
+        },
+      );
+      await this.notifyOffers(booking, picks, expiresAt);
+      return;
+    }
+
+    await this.dispatchRepo.update(
+      { bookingId },
+      {
+        status: 'exhausted',
+        wave: DISPATCH_WAVES.length,
+        nextActionAt: new Date(now.getTime() + EXHAUSTED_RETRY_MINUTES * 60_000),
+      },
+    );
+    if (state.status !== 'exhausted') {
+      this.logger.warn(
+        `No agent took booking ${booking.bookingNumber} after ${DISPATCH_WAVES.length} waves; it stays in the open pool`,
+      );
+    }
+  }
+
+  /** Accepted jobs whose start passed by NO_SHOW_GRACE_MINUTES with no "arrived": the agent isn't coming. */
+  private async releaseNoShows() {
+    const held = await this.bookingRepo.find({
+      where: {
+        status: 'accepted',
+        agentId: Not(IsNull()),
+        bookingDate: LessThanOrEqual(todayString()),
+      },
+      take: TICK_BATCH_SIZE * 4,
+    });
+    if (!held.length) return;
+
+    const now = new Date();
+    const due = await this.eligibility.nextStarts(held, now);
+    for (const booking of held) {
+      const start = due.get(booking.id);
+      if (!start || minutesUntil(start, now) > -NO_SHOW_GRACE_MINUTES) continue;
+      await this.release(
+        booking.id,
+        `no arrival ${NO_SHOW_GRACE_MINUTES} minutes after the start time`,
+      ).catch((err) =>
+        this.logger.error(`No-show release failed for ${booking.id}`, err as Error),
+      );
+    }
+  }
+
+  /** Jobs held by an agent who has since been suspended or lost approval — they can no longer act on them. */
+  private async releaseOrphanedJobs() {
+    const rows: { id: string }[] = await this.bookingRepo
+      .createQueryBuilder('booking')
+      .innerJoin('booking.agent', 'agent')
+      .select('booking.id', 'id')
+      .where('booking.status IN (:...releasable)', { releasable: RELEASABLE_STATUSES })
+      .andWhere("(agent.status = 'SUSPENDED' OR agent.approvalStatus <> 'APPROVED')")
+      .limit(TICK_BATCH_SIZE)
+      .getRawMany();
+    for (const { id } of rows) {
+      await this.release(id, 'the agent account is no longer active').catch((err) =>
+        this.logger.error(`Orphan release failed for ${id}`, err as Error),
+      );
+    }
+  }
+
+  /** Records that this agent is out for this booking, whatever their offer said before. */
+  private async excludeAgent(
+    bookingId: string,
+    agentId: string,
+    outcome: 'declined' | 'released' = 'declined',
+  ) {
+    const now = new Date();
+    await this.offerRepo
+      .createQueryBuilder()
+      .insert()
+      .values({ bookingId, agentId, wave: 0, status: outcome, expiresAt: now, respondedAt: now })
+      .orUpdate(['status', 'responded_at'], ['booking_id', 'agent_id'])
+      .execute();
+  }
+
+  /** Bookings that were assigned, cancelled or released elsewhere while offers were still out. */
+  private async settleClosedJobs() {
+    const rows: { bookingId: string }[] = await this.offerRepo
+      .createQueryBuilder('offer')
+      .innerJoin('offer.booking', 'booking')
+      .select('DISTINCT offer.bookingId', 'bookingId')
+      .where("offer.status = 'pending'")
+      .andWhere("(booking.status <> 'paid' OR booking.agentId IS NOT NULL)")
+      .getRawMany();
+    for (const { bookingId } of rows) {
+      const booking = await this.bookingRepo.findOne({ where: { id: bookingId } });
+      await this.settle(bookingId, booking);
+    }
+  }
+
+  private async settle(bookingId: string, booking: Booking | null) {
+    if (booking?.agentId) {
+      await this.onAccepted(bookingId, booking.agentId);
+      return;
+    }
+    await this.close(bookingId);
+  }
+
+  private async close(bookingId: string) {
+    await this.offerRepo.update(
+      { bookingId, status: 'pending' },
+      { status: 'cancelled', respondedAt: new Date() },
+    );
+    await this.dispatchRepo.update({ bookingId }, { status: 'closed', nextActionAt: null });
+  }
+
+  private async notifyOffers(booking: Booking, picks: Candidate[], expiresAt: Date) {
+    const what = serviceNames(booking)[0] ?? 'New job';
+    const when = `${String(booking.bookingDate).slice(0, 10)} at ${booking.startTime.slice(0, 5)}`;
+    await Promise.all(
+      picks.map(({ agent, distanceKm: km }) =>
+        this.notifications
+          .toUser(agent.userId, {
+            title: 'New job near you',
+            message: `${what} on ${when}${km === null ? '' : ` · ${km.toFixed(1)} km away`}. Accept within ${OFFER_TTL_SECONDS}s.`,
+            type: 'job_offer',
+            data: {
+              bookingId: booking.id,
+              bookingNumber: booking.bookingNumber,
+              expiresAt: expiresAt.toISOString(),
+            },
+          })
+          .catch((err) =>
+            this.logger.error(`Offer push failed for agent ${agent.id}`, err as Error),
+          ),
+      ),
+    );
+  }
+}
+
+function tickIntervalMs() {
+  const raw = process.env.DISPATCH_TICK_MS;
+  if (raw !== undefined && raw !== '') {
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+  return process.env.VERCEL ? 0 : DEFAULT_TICK_MS;
+}

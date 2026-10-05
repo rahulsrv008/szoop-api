@@ -11,6 +11,7 @@ import { HealthModule } from './health/health.module';
 import { CustomerModule } from './customer/customer.module';
 import { AgentModule } from './agent/agent.module';
 import { AdminModule } from './admin/admin.module';
+import { DispatchModule } from './dispatch/dispatch.module';
 import { AdminAccessInterceptor } from './common/auth/admin-access.interceptor';
 
 @Module({
@@ -33,6 +34,7 @@ import { AdminAccessInterceptor } from './common/auth/admin-access.interceptor';
     CustomerModule,
     AgentModule,
     AdminModule,
+    DispatchModule,
   ],
   controllers: [AppController],
   providers: [

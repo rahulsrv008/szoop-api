@@ -18,6 +18,7 @@ import {
 } from 'src/database/entities';
 import { CustomerBookingsController } from './bookings.controller';
 import { CustomerBookingsService } from './bookings.service';
+import { DispatchModule } from 'src/dispatch/dispatch.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { CustomerBookingsService } from './bookings.service';
       HomeCategory,
       HomeCategoryOption,
     ]),
+    DispatchModule,
   ],
   controllers: [CustomerBookingsController],
   providers: [CustomerBookingsService],

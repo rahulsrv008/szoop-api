@@ -14,6 +14,8 @@
     "start:stg": "NODE_ENV=staging node dist/main.js",
     "start:prod": "NODE_ENV=production node dist/main.js",
     "seed:admin": "ts-node -r tsconfig-paths/register src/database/seeds/create-admin.ts",
+    "backfill:h3": "ts-node -r tsconfig-paths/register src/database/seeds/backfill-h3.ts",
+    "test:e2e": "TZ=UTC NODE_ENV=test TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register -r tsconfig-paths/register --test --test-concurrency=1 'test/e2e/*.e2e.ts'",
     "postman:generate": "node scripts/generate-postman-collection.mjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix"
   },
@@ -30,6 +32,7 @@
     "compression": "^1.8.0",
     "dotenv": "^17.4.0",
     "express": "^5.1.0",
+    "h3-js": "^4.5.0",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",

@@ -23,8 +23,13 @@ export const RESCHEDULABLE: BookingStatus[] = [
   'arriving',
 ];
 
-/** Statuses an agent can still be (re)assigned in. */
-export const ASSIGNABLE: BookingStatus[] = ['finding', 'paid', 'accepted'];
+/**
+ * Statuses an admin can assign a first agent in. Only after payment: an agent
+ * on an unpaid ('finding') booking would leave it 'paid' with an agent after
+ * payment, a state the agent can't move forward from. Swapping an existing
+ * agent goes through reassign.
+ */
+export const ASSIGNABLE: BookingStatus[] = ['paid'];
 
 export const ACTIVE_STATUSES: BookingStatus[] = [
   'paid',
