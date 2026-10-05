@@ -18,6 +18,7 @@ import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
+import { DispatchService } from 'src/dispatch/dispatch.service';
 import { ListAdminBookingsDto } from './dto/list-bookings.dto';
 import { AssignAdminBookingAgentDto } from './dto/assign-agent.dto';
 import { ReassignAdminBookingAgentDto } from './dto/reassign-agent.dto';
@@ -69,6 +70,7 @@ export class AdminBookingsService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
     private readonly access: AdminAccessService,
+    private readonly dispatch: DispatchService,
   ) {}
 
   async list(query: ListAdminBookingsDto) {
@@ -267,7 +269,14 @@ export class AdminBookingsService {
 
     if (!ASSIGNABLE.includes(booking.status)) {
       throw new BadRequestException(
-        `An agent cannot be assigned while the booking is ${booking.status}`,
+        booking.status === 'finding'
+          ? 'Wait for the customer to pay before assigning an agent'
+          : `An agent cannot be assigned while the booking is ${booking.status}`,
+      );
+    }
+    if (booking.agentId) {
+      throw new BadRequestException(
+        'Booking already has an agent — use reassign-agent instead',
       );
     }
 
@@ -277,17 +286,14 @@ export class AdminBookingsService {
     const oldData = { agentId: booking.agentId, status: booking.status };
 
     booking.agentId = agent.id;
-    if (booking.status === 'paid') {
-      await this.history.transition(booking, 'accepted', adminId, dto.remarks);
-    } else {
-      await this.bookingRepo.save(booking);
-      await this.history.record(
-        booking.id,
-        booking.status,
-        adminId,
-        dto.remarks ?? `Agent assigned by admin`,
-      );
-    }
+    await this.history.transition(
+      booking,
+      'accepted',
+      adminId,
+      dto.remarks ?? 'Agent assigned by admin',
+    );
+    // Withdraw any offers still out, so nobody else accepts into a 409.
+    await this.dispatch.onAccepted(booking.id, agent.id);
 
     await this.notifications.toUsers([agent.userId, booking.customer.userId], {
       title: 'Agent assigned',

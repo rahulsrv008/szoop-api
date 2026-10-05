@@ -42,6 +42,9 @@ import {
 } from 'src/common/booking/booking-status';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
+import { DispatchService } from 'src/dispatch/dispatch.service';
+import { EligibilityService } from 'src/dispatch/eligibility.service';
+import { RELEASABLE_STATUSES } from 'src/dispatch/dispatch.rules';
 import {
   SETTING_KEYS,
   SettingsService,
@@ -109,6 +112,8 @@ export class CustomerBookingsService {
     private readonly notifications: NotificationDispatchService,
     private readonly settings: SettingsService,
     private readonly zones: ZoneResolverService,
+    private readonly dispatch: DispatchService,
+    private readonly eligibility: EligibilityService,
   ) {}
 
   async create(userId: string, dto: CreateCustomerBookingDto) {
@@ -366,6 +371,7 @@ export class CustomerBookingsService {
 
     if (totalAmount <= 0) {
       await this.history.transition(booking, 'paid', userId, 'Free booking is open for agents');
+      await this.dispatch.kick(booking.id);
     }
 
     await this.history.record(
@@ -759,7 +765,25 @@ export class CustomerBookingsService {
     }`;
     await this.history.record(booking.id, booking.status, userId, remarks);
 
-    if (booking.agent) {
+    if (booking.status === 'paid' && !booking.agentId) {
+      await this.dispatch.onRescheduled(booking.id);
+    }
+
+    // The assigned agent may not be able to make the new time: if it clashes
+    // with their availability or other jobs, the job goes back to dispatch.
+    let agentReleased = false;
+    if (booking.agentId && RELEASABLE_STATUSES.includes(booking.status)) {
+      const blocked = await this.eligibility.blockedJobs(booking.agentId, [booking]);
+      if (blocked.has(booking.id)) {
+        agentReleased = await this.dispatch.release(
+          booking.id,
+          "the new time clashes with the agent's schedule",
+        );
+        if (agentReleased) booking.status = 'paid';
+      }
+    }
+
+    if (booking.agent && !agentReleased) {
       await this.notifications.toUser(booking.agent.userId, {
         title: 'Booking rescheduled',
         message: `Booking ${booking.bookingNumber} moved to ${dto.bookingDate} at ${startTime}.`,
@@ -774,6 +798,7 @@ export class CustomerBookingsService {
       status: booking.status,
       bookingDate: booking.bookingDate,
       startTime: booking.startTime,
+      agentReleased,
     };
   }
 
@@ -818,6 +843,12 @@ export class CustomerBookingsService {
     if (zone && address.serviceAreaId !== zone.id) {
       address.serviceAreaId = zone.id;
       await this.addressRepo.save(address);
+    }
+    // Neither a zone nor a map pin: no agent could ever be matched to it.
+    if (!zone && (address.latitude == null || address.longitude == null)) {
+      throw new BadRequestException(
+        "We don't serve this address yet. Drop a pin on the map or choose an address in a service area.",
+      );
     }
     return zone;
   }

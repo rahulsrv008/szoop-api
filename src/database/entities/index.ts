@@ -66,3 +66,7 @@ export type {
   PayoutStatus,
 } from './booking-settlement';
 export { BookingCustomerFeedback } from './booking-customer-feedback';
+export { BookingOffer } from './booking-offer';
+export type { BookingOfferStatus } from './booking-offer';
+export { BookingDispatch } from './booking-dispatch';
+export type { BookingDispatchStatus } from './booking-dispatch';

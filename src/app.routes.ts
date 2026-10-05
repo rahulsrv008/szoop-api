@@ -11,6 +11,11 @@ export const ROUTES = {
   SWAGGER: process.env.SWAGGER_ROUTE || 'api',
   HEALTH: process.env.HEALTH_CONTROLLER || 'health',
 
+  /** Machine-to-machine routes (cron), never called by the apps. */
+  INTERNAL: {
+    DISPATCH: 'internal/dispatch',
+  },
+
   CUSTOMER: {
     AUTH: 'customer/auth',
     PROFILE: 'customer/profile',

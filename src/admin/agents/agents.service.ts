@@ -26,6 +26,7 @@ import { AssignAdminAgentZonesDto } from './dto/assign-agent-zones.dto';
 import { RejectAdminAgentDto } from './dto/reject-agent.dto';
 import { SuspendAdminAgentDto } from './dto/suspend-agent.dto';
 import { VerifyAdminAgentDocumentDto } from './dto/verify-document.dto';
+import { todayString } from 'src/agent/shared/date.util';
 
 interface AgentListRow {
   agentId: string;
@@ -185,9 +186,10 @@ export class AdminAgentsService {
         .createQueryBuilder('earning')
         .select('COALESCE(SUM(earning.earningAmount), 0)', 'total')
         .where('earning.agentId = :id', { id })
-        .andWhere(
-          `date_trunc('month', earning.earningDate) = date_trunc('month', CURRENT_DATE)`,
-        )
+        // Month from the app clock (pinned to APP_TIMEZONE), not the DB session's zone.
+        .andWhere(`date_trunc('month', earning.earningDate) = date_trunc('month', CAST(:today AS date))`, {
+          today: todayString(),
+        })
         .getRawOne<{ total: string }>(),
       this.earningRepo
         .createQueryBuilder('earning')

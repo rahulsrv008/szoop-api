@@ -12,6 +12,7 @@ import { BookingHistoryService } from 'src/common/booking/booking-history.servic
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { CustomLoggerService } from 'src/common/utils/logger.service';
 import { RazorpayService } from 'src/integrations/payments/razorpay.service';
+import { DispatchService } from 'src/dispatch/dispatch.service';
 import { CreateCustomerPaymentDto } from './dto/create-payment.dto';
 import { VerifyCustomerPaymentDto } from './dto/verify-payment.dto';
 
@@ -31,6 +32,7 @@ export class CustomerPaymentsService {
     private readonly notifications: NotificationDispatchService,
     private readonly razorpay: RazorpayService,
     private readonly logger: CustomLoggerService,
+    private readonly dispatch: DispatchService,
   ) {}
 
   async createOrder(userId: string, dto: CreateCustomerPaymentDto) {
@@ -244,6 +246,13 @@ export class CustomerPaymentsService {
     booking.paymentStatus = 'PAID';
     if (booking.status === 'finding') {
       await this.history.transition(booking, 'paid', changedBy, remarks);
+      // Older data may already carry an agent from before payment: hand the
+      // job straight to them instead of leaving it 'paid' with an agent.
+      if (booking.agentId) {
+        await this.history.transition(booking, 'accepted', changedBy, 'Agent was assigned before payment');
+        return;
+      }
+      await this.dispatch.kick(booking.id);
       return;
     }
     await this.bookingRepo.save(booking);

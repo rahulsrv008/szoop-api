@@ -8,6 +8,7 @@ import { Not, Repository } from 'typeorm';
 import { Booking, Customer, CustomerAddress } from 'src/database/entities';
 import { IdentityService } from 'src/common/auth/identity.service';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
+import { h3CellOf } from 'src/common/geo/geo.util';
 import { CreateCustomerAddressDto } from './dto/create-address.dto';
 import { UpdateCustomerAddressDto } from './dto/update-address.dto';
 
@@ -55,6 +56,7 @@ export class CustomerAddressesService {
         pincode: dto.pincode ?? null,
         latitude: dto.latitude === undefined ? null : String(dto.latitude),
         longitude: dto.longitude === undefined ? null : String(dto.longitude),
+        h3Cell: h3CellOf(dto.latitude, dto.longitude),
         addressType: dto.addressType ?? null,
         serviceAreaId: zone?.id ?? null,
         // The very first address is always the default one.
@@ -84,6 +86,7 @@ export class CustomerAddressesService {
     if (dto.longitude !== undefined) address.longitude = String(dto.longitude);
     if (dto.addressType !== undefined) address.addressType = dto.addressType;
     if (dto.isDefault !== undefined) address.isDefault = dto.isDefault;
+    address.h3Cell = h3CellOf(address.latitude, address.longitude);
 
     const zone = await this.zones.resolve({
       pincode: address.pincode,
