@@ -10,6 +10,7 @@ import { CustomerRatingsModule } from './ratings/ratings.module';
 import { CustomerNotificationsModule } from './notifications/notifications.module';
 import { CustomerSupportModule } from './support/support.module';
 import { CustomerHomeModule } from './home/home.module';
+import { CustomerServiceabilityModule } from './serviceability/serviceability.module';
 
 /** Customer Mobile App — everything under /api/v1/customer/*. */
 @Module({
@@ -25,6 +26,7 @@ import { CustomerHomeModule } from './home/home.module';
     CustomerNotificationsModule,
     CustomerSupportModule,
     CustomerHomeModule,
+    CustomerServiceabilityModule,
   ],
 })
 export class CustomerModule {}

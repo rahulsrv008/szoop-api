@@ -1,5 +1,7 @@
 import {
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -13,6 +15,9 @@ import { IdentityService } from 'src/common/auth/identity.service';
 import { TokenService } from 'src/common/auth/token.service';
 import { AuditService } from 'src/common/services/audit.service';
 import { AuthUser } from 'src/common/types/auth.types';
+import { RateLimitStorage } from 'src/common/rate-limit/rate-limit.storage';
+import { ADMIN_LOGIN_PER_EMAIL } from 'src/common/rate-limit/rate-limit.rules';
+import { maskEmail, RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -24,9 +29,29 @@ export class AdminAuthService {
     private readonly tokens: TokenService,
     private readonly audit: AuditService,
     private readonly access: AdminAccessService,
+    private readonly rateLimits: RateLimitStorage,
+    private readonly rateLimitStats: RateLimitStats,
   ) {}
 
   async login(email: string, password: string) {
+    // Per account, on top of the per-IP route limit: stops one admin's password
+    // being guessed from many IPs. Checked before bcrypt so floods stay cheap.
+    const { limit, ttl } = ADMIN_LOGIN_PER_EMAIL;
+    const attempt = await this.rateLimits.increment(
+      `rl:admin-login-email:${email.trim().toLowerCase()}`,
+      ttl,
+      limit,
+      ttl,
+      'admin-login-email',
+    );
+    if (attempt.isBlocked) {
+      this.rateLimitStats.record('admin-login-email', `email:${maskEmail(email.trim().toLowerCase())}`);
+      throw new HttpException(
+        `Too many login attempts for this account. Try again in ${Math.ceil(attempt.timeToBlockExpire / 60)} minute(s).`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const admin = await this.adminRepo
       .createQueryBuilder('admin')
       .where('LOWER(admin.email) = LOWER(:email)', { email: email.trim() })

@@ -9,12 +9,15 @@ import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { LogoutDto } from './dto/logout.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('customer')
 @Controller(ROUTES.CUSTOMER.AUTH)
 export class CustomerAuthController {
   constructor(private readonly authService: CustomerAuthService) {}
 
+  @RateLimit(RATE_LIMITS.OTP_SEND)
   @Post('send-otp')
   @HttpCode(200)
   @ApiOperation({ summary: 'Send login OTP to a customer mobile number' })
@@ -22,6 +25,7 @@ export class CustomerAuthController {
     return this.authService.sendOtp(dto.mobile);
   }
 
+  @RateLimit(RATE_LIMITS.OTP_SEND)
   @Post('resend-otp')
   @HttpCode(200)
   @ApiOperation({ summary: 'Resend the login OTP (rate limited)' })
@@ -29,6 +33,7 @@ export class CustomerAuthController {
     return this.authService.resendOtp(dto.mobile);
   }
 
+  @RateLimit(RATE_LIMITS.OTP_VERIFY)
   @Post('verify-otp')
   @HttpCode(200)
   @ApiOperation({

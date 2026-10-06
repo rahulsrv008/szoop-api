@@ -70,3 +70,5 @@ export { BookingOffer } from './booking-offer';
 export type { BookingOfferStatus } from './booking-offer';
 export { BookingDispatch } from './booking-dispatch';
 export type { BookingDispatchStatus } from './booking-dispatch';
+export { UpcomingCity } from './upcoming-city';
+export { CityWaitlist } from './city-waitlist';

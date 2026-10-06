@@ -27,6 +27,7 @@ export const ROUTES = {
     NOTIFICATIONS: 'customer/notifications',
     SUPPORT: 'customer/support',
     HOME: 'customer/home',
+    SERVICEABILITY: 'customer/serviceability',
   },
 
   AGENT: {

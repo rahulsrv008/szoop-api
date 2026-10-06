@@ -103,6 +103,8 @@ npm run start:dev
 
 ## Notes
 
+- **Rate limiting:** see [docs/rate-limiting.md](docs/rate-limiting.md). Set `REDIS_URL` and `TRUST_PROXY` in every deployed environment.
+
 - Schema SQL: `sql/001_full_schema.sql` (32 tables). Existing STG APIs still work against the new tables.
 - Keep `DB_SYNC=false` and create/update tables via that SQL in pgAdmin.
 

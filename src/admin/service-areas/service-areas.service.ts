@@ -25,6 +25,7 @@ import {
   CreateAdminServiceAreaDto,
   ServiceZoneAreaItemDto,
 } from './dto/create-service-area.dto';
+import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
 import { UpdateAdminServiceAreaDto } from './dto/update-service-area.dto';
 
 const SCHEMA_SQL = `
@@ -83,6 +84,7 @@ export class AdminServiceAreasService implements OnModuleInit {
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
     private readonly access: AdminAccessService,
+    private readonly zones: ZoneResolverService,
   ) {}
 
   async onModuleInit() {
@@ -123,6 +125,7 @@ export class AdminServiceAreasService implements OnModuleInit {
     const area = this.areaRepo.create(this.applyFields(new ServiceArea(), dto));
     const saved = await this.areaRepo.save(area);
     await this.replaceZoneAreas(saved.id, dto.areas);
+    this.zones.invalidateCache();
     const full = await this.requireArea(saved.id);
 
     await this.audit.record({
@@ -147,6 +150,7 @@ export class AdminServiceAreasService implements OnModuleInit {
     if (dto.areas !== undefined) {
       await this.replaceZoneAreas(id, dto.areas);
     }
+    this.zones.invalidateCache();
     const full = await this.requireArea(id);
 
     await this.audit.record({
@@ -177,6 +181,7 @@ export class AdminServiceAreasService implements OnModuleInit {
       }
       area.isActive = false;
       await this.areaRepo.save(area);
+      this.zones.invalidateCache();
 
       await this.audit.record({
         userId: adminId,
@@ -195,6 +200,7 @@ export class AdminServiceAreasService implements OnModuleInit {
     }
 
     await this.areaRepo.delete({ id });
+    this.zones.invalidateCache();
 
     await this.audit.record({
       userId: adminId,
@@ -367,6 +373,7 @@ export class AdminServiceAreasService implements OnModuleInit {
         })),
       );
     }
+    this.zones.invalidateCache();
     this.logger.log(`Synced ${NCR_SERVICE_ZONES.length} NCR service zones`);
   }
 }
