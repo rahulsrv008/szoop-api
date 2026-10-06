@@ -53,9 +53,13 @@ export interface ZoneSummary {
   region: string | null;
 }
 
+/** How stale a zone change may be on other servers before they see it. */
+const ZONE_CACHE_MS = 60_000;
+
 @Injectable()
 export class ZoneResolverService implements OnModuleInit {
   private readonly logger = new Logger(ZoneResolverService.name);
+  private zonesCache: { at: number; rows: Promise<ServiceArea[]> } | null = null;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -156,9 +160,7 @@ export class ZoneResolverService implements OnModuleInit {
     }
 
     if (latitude != null && longitude != null) {
-      const zones = await this.areaRepo.find({
-        where: { isActive: true },
-      });
+      const zones = await this.activeZones();
       const within = zones
         .map((zone) => ({
           zone,
@@ -190,6 +192,28 @@ export class ZoneResolverService implements OnModuleInit {
     }
 
     return null;
+  }
+
+  /**
+   * Active zones, cached briefly: every location check needs all of them and
+   * they only change through the admin panel. Treat the rows as read-only.
+   */
+  private activeZones() {
+    const now = Date.now();
+    if (!this.zonesCache || now - this.zonesCache.at > ZONE_CACHE_MS) {
+      const rows = this.areaRepo.find({ where: { isActive: true } });
+      // One query even when many requests miss at once; a failed load isn't cached.
+      this.zonesCache = { at: now, rows };
+      rows.catch(() => {
+        if (this.zonesCache?.rows === rows) this.zonesCache = null;
+      });
+    }
+    return this.zonesCache.rows;
+  }
+
+  /** Call after zones change. Other servers pick the change up within ZONE_CACHE_MS. */
+  invalidateCache() {
+    this.zonesCache = null;
   }
 
   private async backfill() {

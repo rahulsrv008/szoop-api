@@ -6,6 +6,8 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { AdminNotificationsService } from './notifications.service';
 import { SendAdminNotificationDto } from './dto/send-notification.dto';
 import { ListAdminNotificationsDto } from './dto/list-notifications.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('admin')
 @AdminAuth()
@@ -15,6 +17,7 @@ export class AdminNotificationsController {
     private readonly notificationsService: AdminNotificationsService,
   ) {}
 
+  @RateLimit(RATE_LIMITS.ADMIN_BROADCAST)
   @Post('send')
   @HttpCode(200)
   @ApiOperation({ summary: 'Broadcast a notification to an audience' })

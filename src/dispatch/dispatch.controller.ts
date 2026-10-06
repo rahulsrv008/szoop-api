@@ -8,6 +8,7 @@ import {
 import { ApiExcludeController } from '@nestjs/swagger';
 import { ROUTES } from 'src/app.routes';
 import { DispatchService } from './dispatch.service';
+import { NoRateLimit } from 'src/common/rate-limit/rate-limit.decorator';
 
 /**
  * Cron entry point for hosts that can't keep a timer alive (Vercel).
@@ -15,6 +16,7 @@ import { DispatchService } from './dispatch.service';
  * without it configured the route doesn't exist.
  */
 @ApiExcludeController()
+@NoRateLimit()
 @Controller(ROUTES.INTERNAL.DISPATCH)
 export class DispatchController {
   constructor(private readonly dispatch: DispatchService) {}

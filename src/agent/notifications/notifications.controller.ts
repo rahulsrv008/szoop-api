@@ -20,6 +20,8 @@ import {
   RegisterDeviceTokenDto,
   RemoveDeviceTokenDto,
 } from './dto/device-token.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('agent')
 @AgentAuth()
@@ -54,6 +56,7 @@ export class AgentNotificationsController {
     return this.notificationsService.markAllRead(userId);
   }
 
+  @RateLimit(RATE_LIMITS.DEVICE_TOKEN)
   @Post('device-token')
   @HttpCode(200)
   @ApiOperation({ summary: 'Register this device for push notifications' })

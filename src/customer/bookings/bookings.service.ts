@@ -42,6 +42,7 @@ import {
 } from 'src/common/booking/booking-status';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
+import { ServiceabilityService } from 'src/common/services/serviceability.service';
 import { DispatchService } from 'src/dispatch/dispatch.service';
 import { EligibilityService } from 'src/dispatch/eligibility.service';
 import { RELEASABLE_STATUSES } from 'src/dispatch/dispatch.rules';
@@ -112,6 +113,7 @@ export class CustomerBookingsService {
     private readonly notifications: NotificationDispatchService,
     private readonly settings: SettingsService,
     private readonly zones: ZoneResolverService,
+    private readonly serviceability: ServiceabilityService,
     private readonly dispatch: DispatchService,
     private readonly eligibility: EligibilityService,
   ) {}
@@ -846,8 +848,9 @@ export class CustomerBookingsService {
     }
     // Neither a zone nor a map pin: no agent could ever be matched to it.
     if (!zone && (address.latitude == null || address.longitude == null)) {
+      const soon = await this.serviceability.comingSoon({ city: address.city });
       throw new BadRequestException(
-        "We don't serve this address yet. Drop a pin on the map or choose an address in a service area.",
+        `${soon.message} Drop a pin on the map or choose an address in a service area.`,
       );
     }
     return zone;

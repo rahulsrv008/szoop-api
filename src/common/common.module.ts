@@ -7,6 +7,7 @@ import {
   AuditLog,
   Booking,
   BookingStatusHistory,
+  CityWaitlist,
   Customer,
   CustomerAddress,
   DeviceToken,
@@ -16,6 +17,7 @@ import {
   ServiceArea,
   ServiceZoneArea,
   SystemSetting,
+  UpcomingCity,
   User,
 } from 'src/database/entities';
 import { IdentityService } from './auth/identity.service';
@@ -26,6 +28,7 @@ import { NotificationDispatchService } from './services/notification-dispatch.se
 import { BookingHistoryService } from './booking/booking-history.service';
 import { SettingsService } from './services/settings.service';
 import { ZoneResolverService } from './services/zone-resolver.service';
+import { ServiceabilityService } from './services/serviceability.service';
 import { AdminAccessService } from './auth/admin-access';
 
 /**
@@ -53,6 +56,8 @@ import { AdminAccessService } from './auth/admin-access';
       SystemSetting,
       ServiceArea,
       ServiceZoneArea,
+      UpcomingCity,
+      CityWaitlist,
     ]),
   ],
   providers: [
@@ -64,6 +69,7 @@ import { AdminAccessService } from './auth/admin-access';
     BookingHistoryService,
     SettingsService,
     ZoneResolverService,
+    ServiceabilityService,
     AdminAccessService,
   ],
   exports: [
@@ -75,6 +81,7 @@ import { AdminAccessService } from './auth/admin-access';
     BookingHistoryService,
     SettingsService,
     ZoneResolverService,
+    ServiceabilityService,
     AdminAccessService,
   ],
 })

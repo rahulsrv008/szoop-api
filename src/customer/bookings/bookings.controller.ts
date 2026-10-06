@@ -19,6 +19,8 @@ import { CreateBeautyBookingDto } from './dto/create-beauty-booking.dto';
 import { CreatePlanBookingDto } from './dto/create-plan-booking.dto';
 import { ListCustomerBookingsQueryDto } from './dto/list-bookings.dto';
 import { RescheduleCustomerBookingDto } from './dto/reschedule-booking.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('customer')
 @CustomerAuth()
@@ -26,6 +28,7 @@ import { RescheduleCustomerBookingDto } from './dto/reschedule-booking.dto';
 export class CustomerBookingsController {
   constructor(private readonly bookingsService: CustomerBookingsService) {}
 
+  @RateLimit(RATE_LIMITS.BOOKING_CREATE)
   @Post()
   @ApiOperation({ summary: 'Create a booking and its pending payment' })
   create(
@@ -35,6 +38,7 @@ export class CustomerBookingsController {
     return this.bookingsService.create(userId, dto);
   }
 
+  @RateLimit(RATE_LIMITS.BOOKING_CREATE)
   @Post('plan')
   @ApiOperation({
     summary: 'Book an On Demand duration or a monthly plan shift from the home screen',
@@ -46,6 +50,7 @@ export class CustomerBookingsController {
     return this.bookingsService.createPlan(userId, dto);
   }
 
+  @RateLimit(RATE_LIMITS.BOOKING_CREATE)
   @Post('beauty')
   @ApiOperation({ summary: 'Book a Beauty at Home service or package' })
   createBeauty(
@@ -79,6 +84,7 @@ export class CustomerBookingsController {
     return this.bookingsService.detail(userId, id);
   }
 
+  @RateLimit(RATE_LIMITS.BOOKING_CHANGE)
   @Post(':id/change-cook')
   @HttpCode(200)
   @ApiOperation({ summary: 'Ask admin to change the cook on a monthly booking' })
@@ -89,6 +95,7 @@ export class CustomerBookingsController {
     return this.bookingsService.requestCookChange(userId, id);
   }
 
+  @RateLimit(RATE_LIMITS.BOOKING_CHANGE)
   @Post(':id/cancel')
   @HttpCode(200)
   @ApiOperation({ summary: 'Cancel a booking that has not started yet' })
@@ -100,6 +107,7 @@ export class CustomerBookingsController {
     return this.bookingsService.cancel(userId, id, dto);
   }
 
+  @RateLimit(RATE_LIMITS.BOOKING_CHANGE)
   @Post(':id/reschedule')
   @HttpCode(200)
   @ApiOperation({ summary: 'Move a booking to another date and time' })

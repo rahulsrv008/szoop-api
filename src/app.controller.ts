@@ -1,6 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiExcludeEndpoint } from '@nestjs/swagger';
 import { AppService } from './app.service';
+import { NoRateLimit } from './common/rate-limit/rate-limit.decorator';
 
 @Controller()
 export class AppController {
@@ -13,6 +14,7 @@ export class AppController {
   }
 
   @Get('health')
+  @NoRateLimit()
   @ApiExcludeEndpoint()
   liveness() {
     return this.appService.getLiveness();
