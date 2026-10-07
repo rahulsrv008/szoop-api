@@ -18,6 +18,7 @@ import { ChecklistService } from 'src/common/services/checklist.service';
 import { EnhancedBookingService } from './enhanced-booking.service';
 import { ListAgentBookingsDto } from './dto/list-bookings.dto';
 import { RejectAgentBookingDto } from './dto/reject-booking.dto';
+import { OnTheWayDto } from './dto/on-the-way.dto';
 import { StartAgentBookingDto } from './dto/start-booking.dto';
 import { CompleteAgentBookingDto } from './dto/complete-booking.dto';
 import { CompleteChecklistItemDto } from './dto/checklist.dto';
@@ -73,12 +74,13 @@ export class AgentBookingsController {
 
   @Post(':id/arrived')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Tell the customer the agent is arriving' })
+  @ApiOperation({ summary: 'Tell the customer the agent is on the way, with a drive-time ETA' })
   arrived(
     @CurrentUser('sub') userId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: OnTheWayDto,
   ) {
-    return this.bookingsService.arrived(userId, id);
+    return this.bookingsService.arrived(userId, id, dto);
   }
 
   @Post(':id/start')

@@ -77,16 +77,16 @@ describe('Agent jobs', () => {
       ids.outOfHours = (await job(north(base, 1), { when: { date: dayOffset(4), time: '12:30:00' } })).id;
     });
 
-    it('shows jobs in the agent zone at any distance, and nearby jobs within their radius', async () => {
+    it('shows jobs in the agent zone at any distance, nearby jobs within their radius, and open jobs past their start', async () => {
       const seen = (await available(agent.userId)).items.map((item) => item.id);
-      for (const key of ['inZoneFar', 'near2km', 'hourlyUnskilled', 'afterBuffer', 'inHours']) {
+      for (const key of ['inZoneFar', 'near2km', 'hourlyUnskilled', 'afterBuffer', 'inHours', 'past']) {
         assert.ok(seen.includes(ids[key]), `expected ${key}`);
       }
     });
 
-    it('hides jobs outside the radius, without a pin, unskilled, past, clashing, on a day off or outside hours', async () => {
+    it('hides jobs outside the radius, without a pin, unskilled, clashing, on a day off or outside hours', async () => {
       const seen = (await available(agent.userId)).items.map((item) => item.id);
-      for (const key of ['far4km', 'noPin', 'unskilled', 'past', 'clash', 'inBuffer', 'dayOff', 'outOfHours']) {
+      for (const key of ['far4km', 'noPin', 'unskilled', 'clash', 'inBuffer', 'dayOff', 'outOfHours']) {
         assert.ok(!seen.includes(ids[key]), `did not expect ${key}`);
       }
     });
@@ -154,11 +154,12 @@ describe('Agent jobs', () => {
       await rejectsWith(jobs.accept(a.userId, second.id), 409);
     });
 
-    it('refuses a job past its start', async () => {
+    it('a job past its start stays open and can still be accepted', async () => {
       const base = area(5);
       const a = await f.agent('late', { live: base, skills: [skill] });
       const old = await job(base, { when: at(-120) });
-      await rejectsWith(jobs.accept(a.userId, old.id), 409);
+      await jobs.accept(a.userId, old.id);
+      assert.equal((await reload(h, old.id)).agentId, a.id);
     });
 
     it('an unapproved agent cannot accept', async () => {
@@ -279,18 +280,12 @@ describe('Agent jobs', () => {
   });
 
   describe('when things go wrong', () => {
-    it('an agent with no "arrived" 20 minutes after the start is a no-show: released and re-dispatched', async () => {
+    it('an accepted job stays with its agent after the start time passes', async () => {
       const base = area(14);
-      const a = await f.agent('no-show', { live: base, skills: [skill] });
-      await f.agent('stand-in', { live: north(base, 1), skills: [skill] });
-      const missed = await job(base, { status: 'accepted', agentId: a.id, when: at(-25) });
-      const justStarted = await job(north(base, 0.1), { status: 'accepted', agentId: a.id, when: at(-5) });
+      const a = await f.agent('late-arrival', { live: base, skills: [skill] });
+      const late = await job(base, { status: 'accepted', agentId: a.id, when: at(-25) });
       await dispatch.tick();
-      const after = await reload(h, missed.id);
-      assert.equal(after.agentId, null);
-      const offers = await offersOf(h, f, missed.id);
-      assert.ok(offers.includes('no-show:0:released') && offers.includes('stand-in:1:pending'), offers.join());
-      assert.equal((await reload(h, justStarted.id)).agentId, a.id, 'only 5 minutes late: left alone');
+      assert.equal((await reload(h, late.id)).agentId, a.id);
     });
 
     it("a suspended agent's held jobs are released", async () => {

@@ -9,7 +9,6 @@ import {
   Brackets,
   In,
   IsNull,
-  LessThanOrEqual,
   MoreThan,
   Not,
   Repository,
@@ -22,7 +21,6 @@ import {
 } from 'src/database/entities';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
-import { todayString } from 'src/agent/shared/date.util';
 import { h3CellsWithinKm } from 'src/common/geo/geo.util';
 import { AgentSkillsService } from 'src/agent/skills/skills.service';
 import { EligibilityService, pairKey } from './eligibility.service';
@@ -31,7 +29,6 @@ import {
   DISPATCH_WAVES,
   EXHAUSTED_RETRY_MINUTES,
   NEAR_TERM_MINUTES,
-  NO_SHOW_GRACE_MINUTES,
   OFFER_TTL_SECONDS,
   RELEASABLE_STATUSES,
   agentBase,
@@ -117,7 +114,6 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.settleClosedJobs();
       await this.releaseOrphanedJobs();
-      await this.releaseNoShows();
 
       const due: { id: string }[] = await this.bookingRepo
         .createQueryBuilder('booking')
@@ -510,32 +506,6 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     if (state.status !== 'exhausted') {
       this.logger.warn(
         `No agent took booking ${booking.bookingNumber} after ${DISPATCH_WAVES.length} waves; it stays in the open pool`,
-      );
-    }
-  }
-
-  /** Accepted jobs whose start passed by NO_SHOW_GRACE_MINUTES with no "arrived": the agent isn't coming. */
-  private async releaseNoShows() {
-    const held = await this.bookingRepo.find({
-      where: {
-        status: 'accepted',
-        agentId: Not(IsNull()),
-        bookingDate: LessThanOrEqual(todayString()),
-      },
-      take: TICK_BATCH_SIZE * 4,
-    });
-    if (!held.length) return;
-
-    const now = new Date();
-    const due = await this.eligibility.nextStarts(held, now);
-    for (const booking of held) {
-      const start = due.get(booking.id);
-      if (!start || minutesUntil(start, now) > -NO_SHOW_GRACE_MINUTES) continue;
-      await this.release(
-        booking.id,
-        `no arrival ${NO_SHOW_GRACE_MINUTES} minutes after the start time`,
-      ).catch((err) =>
-        this.logger.error(`No-show release failed for ${booking.id}`, err as Error),
       );
     }
   }

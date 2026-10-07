@@ -753,7 +753,7 @@ export class CustomerBookingsService {
     }
 
     const startTime = toTimeString(dto.startTime);
-    if (new Date(`${dto.bookingDate}T${startTime}`).getTime() <= Date.now()) {
+    if (istInstant(dto.bookingDate, startTime).getTime() <= Date.now()) {
       throw new BadRequestException('The new slot must be in the future');
     }
 
@@ -1031,7 +1031,10 @@ function cookCharge(
   const rate = cookPackRate(days, both);
   const percent = Math.min(100, Math.max(0, discountPercent));
   const factor = days / 28;
-  const cleaning = rate === 0 ? 0 : round2(Math.max(0, cleaningMonthly) * factor);
+  // Cleaning is charged per visit, so morning + evening is twice the cleaning.
+  const visitsPerDay = both ? 2 : 1;
+  const cleaning =
+    rate === 0 ? 0 : round2(Math.max(0, cleaningMonthly) * factor * visitsPerDay);
   const cooking = round2(rate * count);
   const discount = round2(((count - 1) * rate * percent) / 100);
   const gross = round2(cooking + cleaning);
@@ -1055,10 +1058,34 @@ function toNumberOrNull(value: string | null) {
   return value === null ? null : Number(value);
 }
 
-function toDateString(date: Date) {
-  const pad = (part: number) => String(part).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+/** Customers book in India time; the server clock may be UTC. */
+const IST_OFFSET_MINUTES = 330;
+
+function toIst(date: Date) {
+  return new Date(date.getTime() + IST_OFFSET_MINUTES * 60_000);
 }
+
+function toDateString(date: Date) {
+  const ist = toIst(date);
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${ist.getUTCFullYear()}-${pad(ist.getUTCMonth() + 1)}-${pad(ist.getUTCDate())}`;
+}
+
+/** A wall-clock date + time in India as an absolute instant. */
+function istInstant(date: string, time: string) {
+  return new Date(`${date}T${time.length === 5 ? `${time}:00` : time}+05:30`);
+}
+
+function istMinutesOfDay(date: Date) {
+  const ist = toIst(date);
+  return ist.getUTCHours() * 60 + ist.getUTCMinutes();
+}
+
+/** On-demand visits run 8 AM – 8:30 PM; "Right now" opens 15 minutes early. */
+const SERVICE_OPEN_MINUTES = 8 * 60;
+const SERVICE_LAST_SLOT_MINUTES = 20 * 60 + 30;
+const INSTANT_CUTOFF_MINUTES = SERVICE_LAST_SLOT_MINUTES;
+const INSTANT_OPEN_MINUTES = SERVICE_OPEN_MINUTES - 15;
 
 /** `time` columns are stored as 'HH:MM:SS'. */
 function toTimeString(value: string) {
@@ -1071,34 +1098,46 @@ function addDays(date: Date, days: number) {
   return next;
 }
 
-/** Now + 15 minutes, rounded up to the next 5 minutes. */
+/** Now + 15 minutes in India time, rounded up to the next 5 minutes. */
 function instantSlot() {
-  const slot = new Date(Date.now() + 15 * 60_000);
-  slot.setSeconds(0, 0);
-  slot.setMinutes(Math.ceil(slot.getMinutes() / 5) * 5);
+  const now = new Date();
+  const minutes = istMinutesOfDay(now);
+  if (minutes < INSTANT_OPEN_MINUTES || minutes > INSTANT_CUTOFF_MINUTES) {
+    throw new BadRequestException(
+      'Right now bookings are available from 8 AM to 8:30 PM. Please schedule a slot instead.',
+    );
+  }
+  const slot = toIst(new Date(now.getTime() + 15 * 60_000));
+  slot.setUTCSeconds(0, 0);
+  slot.setUTCMinutes(Math.ceil(slot.getUTCMinutes() / 5) * 5);
   const pad = (part: number) => String(part).padStart(2, '0');
   return {
-    bookingDate: toDateString(slot),
-    startTime: `${pad(slot.getHours())}:${pad(slot.getMinutes())}:00`,
+    bookingDate: `${slot.getUTCFullYear()}-${pad(slot.getUTCMonth() + 1)}-${pad(slot.getUTCDate())}`,
+    startTime: `${pad(slot.getUTCHours())}:${pad(slot.getUTCMinutes())}:00`,
   };
 }
 
 const MAX_ADVANCE_DAYS = 30;
 
-/** A customer-picked slot at least 30 minutes out, otherwise the instant slot. */
+/** A customer-picked India-time slot within service hours, otherwise the instant slot. */
 function scheduledSlot(date?: string, time?: string) {
   if (!date || !time) return instantSlot();
-  const slot = new Date(`${date}T${time}:00`);
+  const slot = istInstant(date, time);
   if (Number.isNaN(slot.getTime())) {
     throw new BadRequestException('Please choose a valid date and time');
   }
-  if (slot.getTime() < Date.now() + 30 * 60_000) {
-    throw new BadRequestException('Please pick a time at least 30 minutes from now');
+  const [hour, minute] = time.split(':').map(Number);
+  const slotMinutes = hour * 60 + minute;
+  if (slotMinutes < SERVICE_OPEN_MINUTES - 15 || slotMinutes > SERVICE_LAST_SLOT_MINUTES + 15) {
+    throw new BadRequestException('Please pick a time between 8 AM and 8:30 PM');
+  }
+  if (slot.getTime() < Date.now() + 10 * 60_000) {
+    throw new BadRequestException('That time has passed. Please pick a later slot.');
   }
   if (slot.getTime() > addDays(new Date(), MAX_ADVANCE_DAYS).getTime()) {
     throw new BadRequestException(`You can book up to ${MAX_ADVANCE_DAYS} days ahead`);
   }
-  return { bookingDate: date, startTime: `${time}:00` };
+  return { bookingDate: date, startTime: time.length === 5 ? `${time}:00` : time };
 }
 
 /** Monthly plans start tomorrow at the earliest. */

@@ -2,6 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CustomLoggerService } from 'src/common/utils/logger.service';
 
+/** Push is best-effort; a slow provider must not hold up the request that triggered it. */
+const PUSH_TIMEOUT_MS = 5000;
+
 export interface PushPayload {
   title: string;
   body: string;
@@ -50,6 +53,7 @@ export class PushService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(messages),
+        signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
       });
       if (!response.ok) {
         this.logger.warn(`Expo push responded ${response.status}`, 'PushService');
@@ -87,8 +91,13 @@ export class PushService {
         notification: { title: payload.title, body: payload.body, sound: 'default' },
         data: payload.data ?? {},
       }),
+      signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+    }).catch((err: unknown) => {
+      this.logger.warn(`FCM push failed: ${err instanceof Error ? err.message : err}`, 'PushService');
+      return null;
     });
 
+    if (!response) return 0;
     if (!response.ok) {
       this.logger.warn(
         `FCM responded ${response.status} for ${tokens.length} token(s)`,

@@ -110,13 +110,19 @@ export class EligibilityService {
 
   /**
    * When each booking is next due (server-local): its earliest not-done visit
-   * for plans, else its own start. Slots more than LATE_JOB_WINDOW_MINUTES in
-   * the past don't count, so a booking missing from the map is no longer
-   * worth sending anyone to.
+   * for plans, else its own start. Slots more than `lateWindowMinutes` in the
+   * past don't count, so a booking missing from the map is no longer worth
+   * pushing to anyone. Pass null to keep past slots (the open pool shows a job
+   * until someone takes it).
    */
-  async nextStarts(bookings: Booking[], now = new Date()) {
+  async nextStarts(
+    bookings: Booking[],
+    now = new Date(),
+    lateWindowMinutes: number | null = LATE_JOB_WINDOW_MINUTES,
+  ) {
     const slots = await this.slotsOf(bookings);
-    const cutoff = now.getTime() - LATE_JOB_WINDOW_MINUTES * 60_000;
+    const cutoff =
+      lateWindowMinutes === null ? -Infinity : now.getTime() - lateWindowMinutes * 60_000;
     const starts = new Map<string, Date>();
     for (const booking of bookings) {
       const upcoming = (slots.get(booking.id) ?? [])

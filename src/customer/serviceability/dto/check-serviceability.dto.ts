@@ -26,7 +26,7 @@ export class CheckServiceabilityDto {
 
   @ApiPropertyOptional({ example: '282001' })
   @IsOptional()
-  @Matches(PINCODE_REGEX, { message: 'pincode must be 6 digits' })
+  @Matches(PINCODE_REGEX, { message: 'Enter a valid 6-digit PIN code' })
   pincode?: string;
 
   @ApiPropertyOptional({ example: 'Agra' })

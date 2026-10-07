@@ -15,7 +15,8 @@ import {
   MoreThanOrEqual,
   Repository,
 } from 'typeorm';
-import { Agent, AgentEarning, Booking, BookingItem, BookingStatusHistory, BookingVisit, CustomerAddress, ServicePricing } from 'src/database/entities';
+import { Agent, AgentEarning, AgentLocation, Booking, BookingItem, BookingStatusHistory, BookingVisit, CustomerAddress, ServicePricing } from 'src/database/entities';
+import { BookingEtaService } from 'src/integrations/maps/booking-eta.service';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import {
@@ -28,9 +29,11 @@ import { DispatchService } from 'src/dispatch/dispatch.service';
 import { EligibilityService } from 'src/dispatch/eligibility.service';
 import {
   GeoPoint,
+  LOCATION_MAX_AGE_MINUTES,
   MAX_RELEASES_PER_WINDOW,
   RELEASE_CUTOFF_MINUTES,
   RELEASE_WINDOW_DAYS,
+  addressPoint,
   agentBase,
   agentOrigin,
   distanceKm,
@@ -44,6 +47,7 @@ import { ListAgentBookingsDto } from './dto/list-bookings.dto';
 import { RejectAgentBookingDto } from './dto/reject-booking.dto';
 import { StartAgentBookingDto } from './dto/start-booking.dto';
 import { CompleteAgentBookingDto } from './dto/complete-booking.dto';
+import { OnTheWayDto } from './dto/on-the-way.dto';
 import { EnhancedBookingService } from './enhanced-booking.service';
 
 const LIST_RELATIONS = ['items', 'items.service', 'address', 'customer'];
@@ -76,6 +80,9 @@ export class AgentBookingsService {
     private readonly earningRepo: Repository<AgentEarning>,
     @InjectRepository(ServicePricing)
     private readonly pricingRepo: Repository<ServicePricing>,
+    @InjectRepository(AgentLocation)
+    private readonly locationRepo: Repository<AgentLocation>,
+    private readonly bookingEta: BookingEtaService,
     private readonly context: AgentContextService,
     private readonly skills: AgentSkillsService,
     private readonly history: BookingHistoryService,
@@ -183,7 +190,7 @@ export class AgentBookingsService {
     // were only a superset, so the exact radius decides.
     // An offer was already vetted by the dispatcher (possibly from further out).
     const zoneSet = new Set(zones);
-    const due = await this.eligibility.nextStarts(rows);
+    const due = await this.eligibility.nextStarts(rows, new Date(), null);
     const matched = rows.filter((booking) => {
       if (!due.has(booking.id)) return false;
       if (offers.has(booking.id)) return true;
@@ -258,9 +265,13 @@ export class AgentBookingsService {
 
     const target = await this.bookingRepo.findOne({ where: { id: bookingId } });
     if (!target) throw new NotFoundException('Booking not found');
-    const due = await this.eligibility.nextStarts([target]);
+    // A retry after a slow first attempt: the job is already this agent's.
+    if (target.agentId === agent.id && target.status !== 'cancelled') {
+      return this.toStatusResponse(target);
+    }
+    const due = await this.eligibility.nextStarts([target], new Date(), null);
     if (!due.has(target.id)) {
-      throw new ConflictException('This job is past its start time');
+      throw new ConflictException('This job has no visits left');
     }
     await this.assertFitsSchedule(agent.id, target);
 
@@ -365,19 +376,57 @@ export class AgentBookingsService {
     };
   }
 
-  async arrived(userId: string, bookingId: string) {
+  async arrived(userId: string, bookingId: string, dto: OnTheWayDto = {}) {
     const agent = await this.context.requireApprovedAgent(userId);
     const booking = await this.requireAssignedBooking(bookingId, agent.id);
+    // A retry after a slow first attempt: already on the way, just refresh the ETA.
+    const alreadyOnTheWay = booking.status === 'arriving';
 
-    await this.history.transition(booking, 'arriving', userId);
+    const origin = await this.setOffFrom(agent, booking.id, dto);
+    const destination = addressPoint(booking.address);
+    const eta =
+      origin && destination
+        ? await this.bookingEta.refresh(booking.id, origin, destination).catch((err) => {
+            this.logger.warn(`ETA for ${booking.bookingNumber} failed: ${(err as Error).message}`);
+            return null;
+          })
+        : null;
 
-    await this.notifyCustomer(booking, {
-      title: 'Agent on the way',
-      message: `${agent.firstName || 'Your agent'} is arriving for booking ${booking.bookingNumber}.`,
-      type: 'booking_arriving',
-    });
+    if (!alreadyOnTheWay) {
+      await this.history.transition(booking, 'arriving', userId);
+      const name = agent.firstName || 'Your agent';
+      await this.notifyCustomer(booking, {
+        title: eta ? `Expert arriving in ~${eta.minutes} min` : 'Agent on the way',
+        message: eta
+          ? `${name} is on the way for booking ${booking.bookingNumber} and should reach you in about ${eta.minutes} min (${eta.distanceKm} km).`
+          : `${name} is arriving for booking ${booking.bookingNumber}.`,
+        type: 'booking_arriving',
+      });
+    }
 
-    return this.toStatusResponse(booking);
+    return {
+      ...this.toStatusResponse(booking),
+      etaMinutes: eta?.minutes ?? null,
+      distanceKm: eta?.distanceKm ?? null,
+      etaSource: eta?.source ?? null,
+    };
+  }
+
+  /** The agent's position as they set off: sent with the request, else a recent GPS ping. */
+  private async setOffFrom(agent: Agent, bookingId: string, dto: OnTheWayDto) {
+    if (dto.latitude != null && dto.longitude != null) {
+      await this.locationRepo.save(
+        this.locationRepo.create({
+          agentId: agent.id,
+          bookingId,
+          latitude: dto.latitude.toFixed(7),
+          longitude: dto.longitude.toFixed(7),
+        }),
+      );
+      return { latitude: dto.latitude, longitude: dto.longitude };
+    }
+    const fix = agentOrigin(agent, LOCATION_MAX_AGE_MINUTES);
+    return fix ? { latitude: fix.lat, longitude: fix.lng } : null;
   }
 
   async start(userId: string, bookingId: string, dto: StartAgentBookingDto) {

@@ -22,9 +22,6 @@ export const RELEASABLE_STATUSES: Booking['status'][] = ['accepted', 'arriving']
 /** A job can still be dispatched/accepted this long after its start: late beats nobody. */
 export const LATE_JOB_WINDOW_MINUTES = 60;
 
-/** An accepted job with no "arrived" by start + this is treated as a no-show and re-dispatched. */
-export const NO_SHOW_GRACE_MINUTES = 20;
-
 /**
  * A multi-visit plan only has to fit an agent's schedule for its first this
  * many days to be offered to them: nobody's calendar is known a month out,
@@ -104,6 +101,12 @@ export function minutesUntil(date: Date, now = new Date()) {
 }
 
 /** Straight-line km from a point to the booking address, when both are known. */
+/** A customer address as a routing point, or null when it has no pin. */
+export function addressPoint(address: CustomerAddress | null | undefined) {
+  const point = address ? toPoint(address.latitude, address.longitude) : null;
+  return point ? { latitude: point.lat, longitude: point.lng } : null;
+}
+
 export function distanceKm(origin: GeoPoint | null, address: CustomerAddress | null | undefined) {
   const target = address ? toPoint(address.latitude, address.longitude) : null;
   if (!origin || !target) return null;
