@@ -5,8 +5,8 @@ export const typeOrmConfig = (): TypeOrmModuleOptions => {
   // Vercel runs many concurrent requests in one instance; a single connection
   // queues them all behind the slowest. Keep it small: instances multiply it.
   const poolMax = process.env.VERCEL
-    ? parseInt(process.env.DB_POOL_MAX_SERVERLESS ?? '5', 10)
-    : parseInt(process.env.DB_POOL_MAX ?? '25', 10);
+    ? parseInt(process.env.DB_POOL_MAX_SERVERLESS ?? '2', 10)
+    : parseInt(process.env.DB_POOL_MAX ?? '5', 10);
   const useSsl = (process.env.DB_SSL ?? 'true').toLowerCase() !== 'false';
 
   return {

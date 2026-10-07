@@ -24,6 +24,7 @@ import { BookingHistoryService } from 'src/common/booking/booking-history.servic
 import { h3CellsWithinKm } from 'src/common/geo/geo.util';
 import { AgentSkillsService } from 'src/agent/skills/skills.service';
 import { EligibilityService, pairKey } from './eligibility.service';
+import { DbPoolMonitor } from 'src/database/db-pool-monitor.service';
 import { DISPATCH_SCHEMA_SQL } from './dispatch.schema';
 import {
   DISPATCH_WAVES,
@@ -83,6 +84,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     private readonly skills: AgentSkillsService,
     private readonly notifications: NotificationDispatchService,
     private readonly history: BookingHistoryService,
+    private readonly dbPool: DbPoolMonitor,
   ) {}
 
   async onModuleInit() {
@@ -96,9 +98,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     const intervalMs = tickIntervalMs();
     if (!intervalMs) return;
     this.timer = setInterval(() => {
-      this.tick().catch((err) =>
-        this.logger.error('Dispatch tick failed', err as Error),
-      );
+      this.tick().catch(() => undefined);
     }, intervalMs);
     this.timer.unref();
   }
@@ -112,10 +112,10 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     if (this.ticking) return { processed: 0 };
     this.ticking = true;
     try {
-      await this.settleClosedJobs();
-      await this.releaseOrphanedJobs();
+      await this.step('settle closed jobs', () => this.settleClosedJobs());
+      await this.step('release orphaned jobs', () => this.releaseOrphanedJobs());
 
-      const due: { id: string }[] = await this.bookingRepo
+      const due: { id: string }[] = await this.step('find due bookings', () => this.bookingRepo
         .createQueryBuilder('booking')
         .leftJoin(BookingDispatch, 'dispatch', 'dispatch.bookingId = booking.id')
         .select('booking.id', 'id')
@@ -135,16 +135,29 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
         .orderBy('booking.bookingDate', 'ASC')
         .addOrderBy('booking.startTime', 'ASC')
         .limit(TICK_BATCH_SIZE)
-        .getRawMany();
+        .getRawMany());
 
       for (const { id } of due) {
-        await this.advance(id).catch((err) =>
-          this.logger.error(`Dispatch failed for booking ${id}`, err as Error),
-        );
+        await this.step(`advance booking ${id}`, () => this.advance(id)).catch(() => undefined);
       }
       return { processed: due.length };
     } finally {
       this.ticking = false;
+    }
+  }
+
+  private async step<T>(name: string, run: () => Promise<T>): Promise<T> {
+    const started = Date.now();
+    try {
+      const result = await run();
+      this.logger.debug(`Tick step "${name}" ok in ${Date.now() - started}ms`);
+      return result;
+    } catch (err) {
+      const e = err as { code?: string; message?: string };
+      this.logger.error(
+        `Tick step "${name}" failed after ${Date.now() - started}ms: ${e.code ?? ''} ${e.message ?? err} — ${this.dbPool.describe()}`,
+      );
+      throw err;
     }
   }
 
