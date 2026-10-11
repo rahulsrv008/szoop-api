@@ -26,6 +26,7 @@ import {
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { h3CellsWithinKm } from 'src/common/geo/geo.util';
 import { DispatchService } from 'src/dispatch/dispatch.service';
+import { WalletService } from 'src/common/services/wallet.service';
 import { EligibilityService } from 'src/dispatch/eligibility.service';
 import {
   GeoPoint,
@@ -91,6 +92,7 @@ export class AgentBookingsService {
     private readonly enhancedBooking: EnhancedBookingService,
     private readonly eligibility: EligibilityService,
     private readonly dispatch: DispatchService,
+    private readonly wallet: WalletService,
   ) {}
 
   async list(userId: string, query: ListAgentBookingsDto) {
@@ -109,6 +111,8 @@ export class AgentBookingsService {
       status: 'paid',
     };
     if (scope === 'available') {
+      // Online agents poll this, so it also keeps dispatch moving where no timer runs.
+      await this.dispatch.tickFromRequest();
       return this.listAvailable(agent, availableWhere, query);
     }
 
@@ -190,7 +194,7 @@ export class AgentBookingsService {
     // were only a superset, so the exact radius decides.
     // An offer was already vetted by the dispatcher (possibly from further out).
     const zoneSet = new Set(zones);
-    const due = await this.eligibility.nextStarts(rows, new Date(), null);
+    const due = await this.eligibility.nextStarts(rows);
     const matched = rows.filter((booking) => {
       if (!due.has(booking.id)) return false;
       if (offers.has(booking.id)) return true;
@@ -266,12 +270,12 @@ export class AgentBookingsService {
     const target = await this.bookingRepo.findOne({ where: { id: bookingId } });
     if (!target) throw new NotFoundException('Booking not found');
     // A retry after a slow first attempt: the job is already this agent's.
-    if (target.agentId === agent.id && target.status !== 'cancelled') {
+    if (target.agentId === agent.id && target.status !== 'cancelled' && target.status !== 'expired') {
       return this.toStatusResponse(target);
     }
-    const due = await this.eligibility.nextStarts([target], new Date(), null);
+    const due = await this.eligibility.nextStarts([target]);
     if (!due.has(target.id)) {
-      throw new ConflictException('This job has no visits left');
+      throw new ConflictException('This job has expired');
     }
     await this.assertFitsSchedule(agent.id, target);
 
@@ -281,8 +285,10 @@ export class AgentBookingsService {
       { agentId: agent.id },
     );
     if (!claimed.affected) {
-      const exists = await this.bookingRepo.count({ where: { id: bookingId } });
-      if (!exists) throw new NotFoundException('Booking not found');
+      const now = await this.bookingRepo.findOne({ where: { id: bookingId }, select: ['id', 'status'] });
+      if (!now) throw new NotFoundException('Booking not found');
+      if (now.status === 'expired') throw new ConflictException('This job has expired');
+      if (now.status === 'cancelled') throw new ConflictException('This job was cancelled');
       throw new ConflictException('Job already taken');
     }
 
@@ -464,12 +470,45 @@ export class AgentBookingsService {
     const agent = await this.context.requireApprovedAgent(userId);
     const booking = await this.requireAssignedBooking(bookingId, agent.id);
 
+    // A repeat of a completion that already went through (double tap, retry): nothing more to do.
+    if (booking.status === 'completed') return this.toStatusResponse(booking);
+    if (booking.status !== 'ongoing') {
+      throw new BadRequestException('Start the job with the customer OTP before completing it');
+    }
+    // Pay after service: closed only once the customer has paid, unless the
+    // agent reports they refused; then the amount is owed in their wallet.
+    const unpaid = booking.paymentMode === 'AFTER_SERVICE' && booking.paymentStatus !== 'PAID';
+    if (unpaid && !dto.customerRefusedPayment) {
+      throw new ConflictException(
+        "The customer hasn't paid yet. Ask them to pay in their app or scan the payment QR.",
+      );
+    }
+
     const finishedEarly = await this.finishCurrentVisit(booking, userId, dto.notes);
     if (finishedEarly) return finishedEarly;
 
-    booking.endTime = toTimeString(new Date());
+    // Claimed with a conditional update, so two calls at once can't both complete it.
+    const endTime = toTimeString(new Date());
+    const claimed = await this.bookingRepo.update(
+      { id: booking.id, status: 'ongoing' },
+      { status: 'completed', endTime, ...(dto.notes !== undefined ? { notes: dto.notes } : {}) },
+    );
+    if (!claimed.affected) return this.toStatusResponse(await this.requireBooking(booking.id));
+    booking.status = 'completed';
+    booking.endTime = endTime;
     if (dto.notes !== undefined) booking.notes = dto.notes;
-    await this.history.transition(booking, 'completed', userId, dto.notes);
+    const amountDue = unpaid ? await this.recordDueIfUnpaid(booking.id) : 0;
+    const remarks = amountDue > 0
+      ? [`Customer did not pay: ₹${amountDue} owed in their wallet`, dto.notes].filter(Boolean).join(' · ')
+      : dto.notes;
+    await this.history.record(booking.id, 'completed', userId, remarks);
+    if (amountDue > 0) {
+      await this.notifyCustomer(booking, {
+        title: 'Payment due',
+        message: `Booking ${booking.bookingNumber} is done, but ₹${amountDue} wasn't paid. It's shown as due in your wallet; pay it from the booking.`,
+        type: 'wallet_due',
+      });
+    }
 
     const earning = await this.recordEarning(agent.id, booking);
 
@@ -482,6 +521,7 @@ export class AgentBookingsService {
     return {
       ...this.toStatusResponse(booking),
       endTime: booking.endTime,
+      amountDue,
       earning: {
         serviceHours: Number(earning.serviceHours),
         revenueGenerated: Number(earning.revenueGenerated),
@@ -489,6 +529,36 @@ export class AgentBookingsService {
         earningDate: earning.earningDate,
       },
     };
+  }
+
+  /**
+   * What the agent's app needs to collect a pay-after-service booking: whether
+   * it's paid yet, and the link the payment QR encodes (opens the customer
+   * app's pay screen for this booking).
+   */
+  async paymentStatus(userId: string, bookingId: string) {
+    const agent = await this.context.requireApprovedAgent(userId);
+    const booking = await this.requireAssignedBooking(bookingId, agent.id);
+    return {
+      bookingId: booking.id,
+      bookingNumber: booking.bookingNumber,
+      paymentMode: booking.paymentMode,
+      paymentStatus: booking.paymentStatus,
+      amount: Number(booking.totalAmount),
+      payUrl: `${process.env.CUSTOMER_PAY_URL_BASE || 'clearit://pay/'}${booking.id}`,
+    };
+  }
+
+  /** Records the amount as owed, unless a payment landed while the job was being closed. */
+  private recordDueIfUnpaid(bookingId: string) {
+    return this.bookingRepo.manager.transaction(async (manager) => {
+      const locked = await manager.findOneOrFail(Booking, {
+        where: { id: bookingId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (locked.paymentStatus === 'PAID') return 0;
+      return this.wallet.recordDue(locked, manager);
+    });
   }
 
   private async matchVisitOtp(booking: Booking, otp: string) {
@@ -499,40 +569,69 @@ export class AgentBookingsService {
     return visits.find((visit) => visit.status !== 'done' && visit.otp === otp) ?? null;
   }
 
-  /** Marks the current visit done. Returns a response when later visits are still left. */
+  /**
+   * Marks the current visit done. Returns a response when later visits are
+   * still left (or when another call already finished this one). The booking
+   * row is locked and re-checked first, so two Complete calls at once can't
+   * finish two visits.
+   */
   private async finishCurrentVisit(booking: Booking, userId: string, notes?: string) {
-    const visits = await this.visitRepo.find({
-      where: { bookingId: booking.id },
-      order: { visitDate: 'ASC', startTime: 'ASC' },
+    const outcome = await this.bookingRepo.manager.transaction(async (manager) => {
+      const locked = await manager.findOne(Booking, {
+        where: { id: booking.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked || locked.status !== 'ongoing') return { kind: 'stale' as const };
+
+      const visits = await manager.find(BookingVisit, {
+        where: { bookingId: booking.id },
+        order: { visitDate: 'ASC', startTime: 'ASC' },
+      });
+      if (!visits.length) return { kind: 'single' as const };
+
+      const current =
+        visits.find((visit) => visit.status === 'active') ??
+        visits.find((visit) => visit.status === 'pending');
+      if (current) {
+        await manager.update(BookingVisit, { id: current.id }, { status: 'done', completedAt: new Date() });
+        current.status = 'done';
+      }
+
+      const next = visits.find((visit) => visit.status === 'pending');
+      if (!next) return { kind: 'last' as const };
+
+      const label = current ? `${shiftName(current.shift)} on ${String(current.visitDate).slice(0, 10)}` : 'This visit';
+      await manager.update(
+        Booking,
+        { id: booking.id },
+        { status: 'accepted', startOtp: next.otp, endTime: null, ...(notes !== undefined ? { notes } : {}) },
+      );
+      await manager.save(
+        manager.create(BookingStatusHistory, {
+          bookingId: booking.id,
+          status: 'accepted',
+          changedBy: userId,
+          remarks: `${label} completed`,
+        }),
+      );
+      return { kind: 'next' as const, label, otp: next.otp };
     });
-    if (!visits.length) return null;
 
-    const current =
-      visits.find((visit) => visit.status === 'active') ??
-      visits.find((visit) => visit.status === 'pending');
-    if (current) {
-      current.status = 'done';
-      current.completedAt = new Date();
-      await this.visitRepo.save(current);
-    }
-
-    const next = visits.find((visit) => visit.status === 'pending');
-    if (!next) return null;
+    if (outcome.kind === 'stale') return this.toStatusResponse(await this.requireBooking(booking.id));
+    if (outcome.kind !== 'next') return null;
 
     booking.status = 'accepted';
-    booking.startOtp = next.otp;
+    booking.startOtp = outcome.otp;
     booking.endTime = null;
     if (notes !== undefined) booking.notes = notes;
-    await this.bookingRepo.save(booking);
-    const label = current ? `${shiftName(current.shift)} on ${String(current.visitDate).slice(0, 10)}` : 'This visit';
-    await this.history.record(booking.id, 'accepted', userId, `${label} completed`);
     await this.notifyCustomer(booking, {
       title: 'Visit completed',
-      message: `${label} for booking ${booking.bookingNumber} is done. The next visit has a new OTP.`,
+      message: `${outcome.label} for booking ${booking.bookingNumber} is done. The next visit has a new OTP.`,
       type: 'booking_visit_done',
     });
     return this.toStatusResponse(booking);
   }
+
 
   /**
    * Agent payout: per-hour rates from `service_pricing` when every booked
@@ -695,6 +794,8 @@ export class AgentBookingsService {
       address: this.toAddress(booking.address, isMine),
       customerFirstName: booking.customer?.firstName ?? null,
       isAssignedToMe: isMine,
+      paymentMode: booking.paymentMode,
+      paymentStatus: booking.paymentStatus,
     };
   }
 

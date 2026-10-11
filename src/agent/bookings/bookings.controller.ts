@@ -94,6 +94,15 @@ export class AgentBookingsController {
     return this.bookingsService.start(userId, id, dto);
   }
 
+  @Get(':id/payment')
+  @ApiOperation({ summary: 'Pay-after-service status and the payment QR link, for collecting at the end of the job' })
+  paymentStatus(
+    @CurrentUser('sub') userId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.bookingsService.paymentStatus(userId, id);
+  }
+
   @Post(':id/complete')
   @HttpCode(200)
   @ApiOperation({ summary: 'Complete the service and book the agent earning' })

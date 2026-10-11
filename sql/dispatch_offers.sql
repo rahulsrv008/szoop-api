@@ -30,5 +30,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_booking_offers_booking_agent
 CREATE INDEX IF NOT EXISTS idx_booking_offers_agent_id
   ON booking_offers (agent_id);
 
+-- One row: when the next request-driven tick may run (hosts without a timer, e.g. Vercel).
+CREATE TABLE IF NOT EXISTS dispatch_clock (
+  id INT PRIMARY KEY,
+  next_tick_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO dispatch_clock (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
 GRANT ALL PRIVILEGES ON TABLE booking_dispatches TO cladmin;
 GRANT ALL PRIVILEGES ON TABLE booking_offers TO cladmin;
+GRANT ALL PRIVILEGES ON TABLE dispatch_clock TO cladmin;

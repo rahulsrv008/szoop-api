@@ -77,16 +77,16 @@ describe('Agent jobs', () => {
       ids.outOfHours = (await job(north(base, 1), { when: { date: dayOffset(4), time: '12:30:00' } })).id;
     });
 
-    it('shows jobs in the agent zone at any distance, nearby jobs within their radius, and open jobs past their start', async () => {
+    it('shows jobs in the agent zone at any distance, and nearby jobs within their radius', async () => {
       const seen = (await available(agent.userId)).items.map((item) => item.id);
-      for (const key of ['inZoneFar', 'near2km', 'hourlyUnskilled', 'afterBuffer', 'inHours', 'past']) {
+      for (const key of ['inZoneFar', 'near2km', 'hourlyUnskilled', 'afterBuffer', 'inHours']) {
         assert.ok(seen.includes(ids[key]), `expected ${key}`);
       }
     });
 
-    it('hides jobs outside the radius, without a pin, unskilled, clashing, on a day off or outside hours', async () => {
+    it('hides jobs outside the radius, without a pin, unskilled, expired, clashing, on a day off or outside hours', async () => {
       const seen = (await available(agent.userId)).items.map((item) => item.id);
-      for (const key of ['far4km', 'noPin', 'unskilled', 'clash', 'inBuffer', 'dayOff', 'outOfHours']) {
+      for (const key of ['far4km', 'noPin', 'unskilled', 'past', 'clash', 'inBuffer', 'dayOff', 'outOfHours']) {
         assert.ok(!seen.includes(ids[key]), `did not expect ${key}`);
       }
     });
@@ -114,9 +114,9 @@ describe('Agent jobs', () => {
 
     it('lists an offered job first with its expiry, even from outside the radius', async () => {
       const offered = await job(north(area(1.5), 0));
-      await f.agent('offer-target', { live: north(area(1.5), 7.5), skills: [skill] });
+      await f.agent('offer-target', { live: north(area(1.5), 3.5), skills: [skill] });
       await dispatch.kick(offered.id);
-      // Nobody within 3/5 km: the 7.5 km agent gets it in wave 3.
+      // Nobody within 1-3 km: the 3.5 km agent (outside their own 3 km radius) gets it in wave 4.
       const target = await h.repo(E.Agent).findOneByOrFail({ firstName: 'offer-target' });
       const list = await available(target.userId);
       assert.equal(list.items[0]?.id, offered.id);
@@ -154,12 +154,11 @@ describe('Agent jobs', () => {
       await rejectsWith(jobs.accept(a.userId, second.id), 409);
     });
 
-    it('a job past its start stays open and can still be accepted', async () => {
+    it('refuses a job past its start', async () => {
       const base = area(5);
       const a = await f.agent('late', { live: base, skills: [skill] });
-      const old = await job(base, { when: at(-120) });
-      await jobs.accept(a.userId, old.id);
-      assert.equal((await reload(h, old.id)).agentId, a.id);
+      const old = await job(base, { when: at(-5) });
+      await rejectsWith(jobs.accept(a.userId, old.id), 409);
     });
 
     it('an unapproved agent cannot accept', async () => {
@@ -234,6 +233,58 @@ describe('Agent jobs', () => {
       await jobs.complete(a.userId, plan.id, {} as never);
       after = await reload(h, plan.id);
       assert.equal(after.status, 'completed');
+    });
+  });
+
+  describe('completing exactly once', () => {
+    it('a double tap or retry on complete changes nothing: one completion, one earning', async () => {
+      const base = area(26);
+      const a = await f.agent('double-tap', { live: base, skills: [skill] });
+      const booking = await job(base, { status: 'ongoing', agentId: a.id });
+
+      await Promise.all([
+        jobs.complete(a.userId, booking.id, {} as never),
+        jobs.complete(a.userId, booking.id, {} as never),
+      ]);
+      await jobs.complete(a.userId, booking.id, {} as never);
+
+      assert.equal((await reload(h, booking.id)).status, 'completed');
+      assert.equal(await h.repo(E.AgentEarning).countBy({ bookingId: booking.id }), 1);
+      assert.equal(await h.repo(E.BookingStatusHistory).countBy({ bookingId: booking.id, status: 'completed' }), 1);
+    });
+
+    it("a plan's double complete finishes only the current visit", async () => {
+      const base = area(27);
+      const a = await f.agent('double-cook', { live: base, skills: [skill] });
+      const plan = await job(base, { planType: 'MONTHLY', when: { date: dayOffset(0), time: '08:00:00' } });
+      await h.repo(E.BookingVisit).save(
+        [0, 1].map((offset, index) => ({
+          bookingId: plan.id,
+          visitDate: dayOffset(offset),
+          shift: 'morning',
+          startTime: '08:00:00',
+          otp: index === 0 ? '4321' : '8765',
+          status: 'pending',
+        })) as never,
+      );
+      await h.repo(E.Booking).update({ id: plan.id }, { status: 'accepted', agentId: a.id });
+      await jobs.start(a.userId, plan.id, { otp: '4321' } as never);
+
+      await Promise.allSettled([
+        jobs.complete(a.userId, plan.id, {} as never),
+        jobs.complete(a.userId, plan.id, {} as never),
+      ]);
+      assert.equal(await h.repo(E.BookingVisit).countBy({ bookingId: plan.id, status: 'done' }), 1);
+      const after = await reload(h, plan.id);
+      assert.equal(after.status, 'accepted');
+      assert.equal(after.startOtp, '8765');
+    });
+
+    it('complete is refused before the job is started', async () => {
+      const base = area(28);
+      const a = await f.agent('too-soon', { live: base, skills: [skill] });
+      const booking = await job(base, { status: 'accepted', agentId: a.id });
+      await rejectsWith(jobs.complete(a.userId, booking.id, {} as never), 400);
     });
   });
 

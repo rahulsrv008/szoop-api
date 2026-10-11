@@ -12,6 +12,7 @@ import {
   Like,
   LessThanOrEqual,
   MoreThanOrEqual,
+  Not,
   Repository,
 } from 'typeorm';
 import {
@@ -25,7 +26,9 @@ import {
   HomeCategoryOption,
   HomePricingTier,
   Payment,
+  PaymentTransaction,
   Rating,
+  BookingStatusHistory,
   SupportTicket,
   Service,
   ServiceArea,
@@ -36,9 +39,13 @@ import { CreateBeautyBookingDto } from './dto/create-beauty-booking.dto';
 import { CreatePlanBookingDto } from './dto/create-plan-booking.dto';
 import { IdentityService } from 'src/common/auth/identity.service';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
+import { WalletService } from 'src/common/services/wallet.service';
+import { BookingClosureService, couponNote } from 'src/common/booking/booking-closure.service';
 import {
+  MAX_PAYMENT_ATTEMPTS,
+  PAY_AFTER_SERVICE_MAX_AMOUNT,
+  PAYMENT_WINDOW_MINUTES,
   RESCHEDULABLE,
-  assertTransition,
 } from 'src/common/booking/booking-status';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
@@ -116,10 +123,13 @@ export class CustomerBookingsService {
     private readonly serviceability: ServiceabilityService,
     private readonly dispatch: DispatchService,
     private readonly eligibility: EligibilityService,
+    private readonly wallet: WalletService,
+    private readonly closure: BookingClosureService,
   ) {}
 
   async create(userId: string, dto: CreateCustomerBookingDto) {
     const customerId = await this.identity.requireCustomerId(userId);
+    await this.assertNoDues(customerId);
     const address = await this.addressRepo.findOne({
       where: { id: dto.addressId, customerId },
     });
@@ -231,6 +241,7 @@ export class CustomerBookingsService {
    */
   async createPlan(userId: string, dto: CreatePlanBookingDto) {
     const customerId = await this.identity.requireCustomerId(userId);
+    await this.assertNoDues(customerId);
     const address = await this.addressRepo.findOne({
       where: { id: dto.addressId, customerId },
     });
@@ -279,16 +290,18 @@ export class CustomerBookingsService {
 
     // Shift tiers carry a start time; duration tiers are On Demand.
     const planType = cookService || tier.startTime ? 'MONTHLY' : 'HOURLY';
-    const { bookingDate, startTime } = cookService
+    const { bookingDate, startTime, bookingMode } = cookService
       ? {
           bookingDate: planStartDate(dto.bookingDate),
           startTime: toTimeString(dto.startTime || tier.startTime || '08:00'),
+          bookingMode: 'SCHEDULED' as const,
         }
       : planType === 'HOURLY'
         ? scheduledSlot(dto.bookingDate, dto.startTime)
         : {
             bookingDate: planStartDate(dto.bookingDate),
             startTime: toTimeString(tier.startTime || '08:00'),
+            bookingMode: 'SCHEDULED' as const,
           };
 
     const cook = cookService
@@ -341,6 +354,7 @@ export class CustomerBookingsService {
         serviceAreaId: serviceArea?.id ?? null,
         bookingDate,
         startTime,
+        bookingMode,
         durationMinutes: cookService ? 45 : tier.minutes ?? 240,
         subtotal: subtotal.toFixed(2),
         discount: discount.toFixed(2),
@@ -391,12 +405,13 @@ export class CustomerBookingsService {
     if (!service) throw new NotFoundException('This service is unavailable');
 
     const customerId = await this.identity.requireCustomerId(userId);
+    await this.assertNoDues(customerId);
     const address = await this.addressRepo.findOne({
       where: { id: dto.addressId, customerId },
     });
     if (!address) throw new NotFoundException('Address not found');
 
-    const { bookingDate, startTime } = scheduledSlot(dto.bookingDate, dto.startTime);
+    const { bookingDate, startTime, bookingMode } = scheduledSlot(dto.bookingDate, dto.startTime);
     const subtotal = round2(service.price);
     const taxPercent = await this.settings.getNumber(SETTING_KEYS.BOOKING_TAX_PERCENT, 0);
     const tax = round2((subtotal * taxPercent) / 100);
@@ -411,6 +426,7 @@ export class CustomerBookingsService {
         serviceAreaId: serviceArea?.id ?? null,
         bookingDate,
         startTime,
+        bookingMode,
         durationMinutes: service.minutes,
         subtotal: subtotal.toFixed(2),
         discount: '0.00',
@@ -517,11 +533,18 @@ export class CustomerBookingsService {
 
   async list(userId: string, query: ListCustomerBookingsQueryDto) {
     const customerId = await this.identity.requireCustomerId(userId);
+    // The home screen polls this while a job is live; it also keeps dispatch
+    // moving (waves, "Right now" expiry) where no timer runs.
+    await this.dispatch.tickFromRequest();
 
+    // Only confirmed bookings: an unpaid request ('finding', or voided once it
+    // timed out or was dropped) never became one.
+    if (query.status === 'finding') return paginated([], 0, query);
     const [bookings, total] = await this.bookingRepo.findAndCount({
       where: {
         customerId,
-        ...(query.status ? { status: query.status } : {}),
+        status: query.status ?? Not('finding'),
+        paymentStatus: Not('VOIDED'),
         ...dateRangeWhere(query.from, query.to),
       },
       relations: ['items', 'items.service', 'agent', 'address'],
@@ -537,6 +560,7 @@ export class CustomerBookingsService {
         })
       : [];
     const ratedIds = new Set(ratedRows.map((row) => row.bookingId));
+    const refunds = await this.wallet.refundsFor(bookings.map((booking) => booking.id));
 
     const items = bookings.map((booking) => ({
       id: booking.id,
@@ -554,6 +578,8 @@ export class CustomerBookingsService {
       createdAt: booking.createdAt,
       updatedAt: booking.updatedAt,
       rated: ratedIds.has(booking.id),
+      paymentMode: booking.paymentMode,
+      refundedToWallet: refunds.get(booking.id) ?? 0,
       address: booking.address
         ? [booking.address.addressLine1, booking.address.city]
             .filter(Boolean)
@@ -581,12 +607,15 @@ export class CustomerBookingsService {
     const booking = await this.findOwn(customerId, id, DETAIL_RELATIONS);
     const statusHistory = await this.history.history(booking.id);
     const rating = (booking.ratings ?? [])[0] ?? null;
+    const refunds = await this.wallet.refundsFor([booking.id]);
 
     return {
       id: booking.id,
       bookingNumber: booking.bookingNumber,
       status: booking.status,
       paymentStatus: booking.paymentStatus,
+      paymentMode: booking.paymentMode,
+      refundedToWallet: refunds.get(booking.id) ?? 0,
       bookingDate: booking.bookingDate,
       startTime: booking.startTime,
       endTime: booking.endTime,
@@ -699,28 +728,37 @@ export class CustomerBookingsService {
 
   async cancel(userId: string, id: string, dto: CancelCustomerBookingDto) {
     const customerId = await this.identity.requireCustomerId(userId);
-    const booking = await this.findOwn(customerId, id, ['payment', 'agent']);
-    if (booking.planType === 'MONTHLY' && booking.agentId) {
-      throw new BadRequestException('A cook is already assigned. Ask to change cook instead of cancelling.');
+    const booking = await this.findOwn(customerId, id, ['agent']);
+
+    // One transaction: status, payment (REFUNDED to the wallet, or VOIDED) and history.
+    const closed = await this.closure.close(booking.id, 'cancelled', {
+      reason: 'BOOKING_CANCELLED',
+      changedBy: userId,
+      remarks: dto.reason ? `Cancelled by customer: ${dto.reason}` : 'Cancelled by customer',
+      onlyIf: (locked) => {
+        if (locked.planType === 'MONTHLY' && locked.agentId) {
+          throw new BadRequestException(
+            'A cook is already assigned. Ask to change cook instead of cancelling.',
+          );
+        }
+        return true;
+      },
+    });
+    if (!closed) throw new NotFoundException('Booking not found');
+    const { refundedToWallet, releasedCoupons } = closed;
+
+    if (refundedToWallet > 0) {
+      await this.notifications
+        .toUser(userId, {
+          title: 'Refund added to your wallet',
+          message: `Booking ${booking.bookingNumber} was cancelled. ₹${refundedToWallet} has been added to your wallet.${couponNote(releasedCoupons)}`,
+          type: 'wallet_refund',
+          data: { bookingId: booking.id, bookingNumber: booking.bookingNumber },
+        })
+        .catch(() => undefined);
     }
-    // Checked up front so a rejected cancellation leaves the payment untouched.
-    assertTransition(booking.status, 'cancelled');
 
-    // A captured payment is refunded, an unpaid one is simply voided.
-    const nextPaymentStatus =
-      booking.payment?.paymentStatus === 'PAID' ? 'REFUNDED' : 'VOIDED';
-    if (booking.payment) {
-      booking.payment.paymentStatus = nextPaymentStatus;
-      await this.paymentRepo.save(booking.payment);
-    }
-    booking.paymentStatus = nextPaymentStatus;
-
-    const remarks = dto.reason
-      ? `Cancelled by customer: ${dto.reason}`
-      : 'Cancelled by customer';
-    await this.history.transition(booking, 'cancelled', userId, remarks);
-
-    if (booking.agent) {
+    if (booking.agent && booking.agent.id === closed.booking.agentId) {
       await this.notifications.toUser(booking.agent.userId, {
         title: 'Booking cancelled',
         message: `Booking ${booking.bookingNumber} was cancelled by the customer.`,
@@ -732,9 +770,85 @@ export class CustomerBookingsService {
     return {
       id: booking.id,
       bookingNumber: booking.bookingNumber,
-      status: booking.status,
-      paymentStatus: booking.paymentStatus,
+      status: closed.booking.status,
+      paymentStatus: closed.paymentStatus,
+      refundedToWallet,
+      releasedCoupons,
       cancelledReason: dto.reason ?? null,
+    };
+  }
+
+  /**
+   * Online payment failed MAX_PAYMENT_ATTEMPTS times: confirm the booking
+   * anyway, to be paid by the end of the job (in the app, or by scanning the
+   * agent's QR). Single visits up to PAY_AFTER_SERVICE_MAX_AMOUNT only; plans
+   * stay prepaid.
+   */
+  async payAfterService(userId: string, id: string) {
+    const customerId = await this.identity.requireCustomerId(userId);
+    await this.findOwn(customerId, id);
+
+    const booking = await this.bookingRepo.manager.transaction(async (manager) => {
+      const locked = await manager.findOneOrFail(Booking, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (locked.status !== 'finding') {
+        throw new BadRequestException('Only a booking waiting for payment can switch to pay after service');
+      }
+      if (locked.planType === 'MONTHLY') {
+        throw new BadRequestException('Monthly plans are paid upfront');
+      }
+      if (Number(locked.totalAmount) > PAY_AFTER_SERVICE_MAX_AMOUNT) {
+        throw new BadRequestException(
+          `Pay after service is only for bookings up to ₹${PAY_AFTER_SERVICE_MAX_AMOUNT}`,
+        );
+      }
+      if (Date.now() - locked.createdAt.getTime() > PAYMENT_WINDOW_MINUTES * 60_000) {
+        throw new BadRequestException('This booking request has timed out. Please book again.');
+      }
+      const start = new Date(`${String(locked.bookingDate).slice(0, 10)}T${locked.startTime}`).getTime();
+      if (start <= Date.now()) {
+        throw new BadRequestException('This slot has passed. Please book again.');
+      }
+      const payment = await manager.findOne(Payment, { where: { bookingId: id } });
+      // Offered only once the online attempts are used up (one order each).
+      const attempts = payment
+        ? await manager.count(PaymentTransaction, { where: { paymentId: payment.id, status: 'created' } })
+        : 0;
+      if (attempts < MAX_PAYMENT_ATTEMPTS) {
+        throw new BadRequestException(
+          `Pay after service is offered after ${MAX_PAYMENT_ATTEMPTS} failed online payments`,
+        );
+      }
+
+      if (payment && payment.paymentStatus !== 'PENDING') {
+        await manager.update(Payment, { id: payment.id }, { paymentStatus: 'PENDING' });
+      }
+      await manager.update(
+        Booking,
+        { id },
+        { status: 'paid', paymentMode: 'AFTER_SERVICE', paymentStatus: 'PENDING' },
+      );
+      await manager.save(
+        manager.create(BookingStatusHistory, {
+          bookingId: id,
+          status: 'paid',
+          changedBy: userId,
+          remarks: 'Confirmed: the customer pays after the service',
+        }),
+      );
+      return { ...locked, status: 'paid' as const, paymentMode: 'AFTER_SERVICE' as const, paymentStatus: 'PENDING' };
+    });
+
+    await this.dispatch.kick(id);
+    return {
+      id: booking.id,
+      bookingNumber: booking.bookingNumber,
+      status: booking.status,
+      paymentMode: booking.paymentMode,
+      paymentStatus: booking.paymentStatus,
+      totalAmount: Number(booking.totalAmount),
     };
   }
 
@@ -760,6 +874,8 @@ export class CustomerBookingsService {
     const previous = `${booking.bookingDate} ${booking.startTime}`;
     booking.bookingDate = dto.bookingDate;
     booking.startTime = startTime;
+    // A picked slot, so no longer a "Right now" job on the 10-minute search clock.
+    booking.bookingMode = 'SCHEDULED';
     await this.bookingRepo.save(booking);
 
     const remarks = `Rescheduled from ${previous} to ${dto.bookingDate} ${startTime}${
@@ -854,6 +970,20 @@ export class CustomerBookingsService {
       );
     }
     return zone;
+  }
+
+  /**
+   * Any completed booking left unpaid blocks new bookings until that booking
+   * is paid, whatever else is in the wallet (refunds don't pay it off).
+   */
+  private async assertNoDues(customerId: string) {
+    const dues = await this.wallet.outstandingDues(customerId);
+    if (!dues.length) return;
+    const owed = dues.reduce((sum, due) => sum + due.amount, 0);
+    const from = dues[0].bookingNumber ? ` from booking ${dues[0].bookingNumber}` : '';
+    throw new ConflictException(
+      `You have ₹${owed} due${from}. Please pay it before making a new booking.`,
+    );
   }
 
   private async findOwn(
@@ -1114,6 +1244,7 @@ function instantSlot() {
   return {
     bookingDate: `${slot.getUTCFullYear()}-${pad(slot.getUTCMonth() + 1)}-${pad(slot.getUTCDate())}`,
     startTime: `${pad(slot.getUTCHours())}:${pad(slot.getUTCMinutes())}:00`,
+    bookingMode: 'INSTANT' as const,
   };
 }
 
@@ -1137,7 +1268,11 @@ function scheduledSlot(date?: string, time?: string) {
   if (slot.getTime() > addDays(new Date(), MAX_ADVANCE_DAYS).getTime()) {
     throw new BadRequestException(`You can book up to ${MAX_ADVANCE_DAYS} days ahead`);
   }
-  return { bookingDate: date, startTime: time.length === 5 ? `${time}:00` : time };
+  return {
+    bookingDate: date,
+    startTime: time.length === 5 ? `${time}:00` : time,
+    bookingMode: 'SCHEDULED' as const,
+  };
 }
 
 /** Monthly plans start tomorrow at the earliest. */

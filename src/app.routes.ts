@@ -23,6 +23,7 @@ export const ROUTES = {
     SERVICES: 'customer/services',
     BOOKINGS: 'customer/bookings',
     PAYMENTS: 'customer/payments',
+    WALLET: 'customer/wallet',
     RATINGS: 'customer/ratings',
     NOTIFICATIONS: 'customer/notifications',
     SUPPORT: 'customer/support',

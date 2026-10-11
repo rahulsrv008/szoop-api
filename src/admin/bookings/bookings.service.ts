@@ -9,14 +9,13 @@ import {
   Agent,
   AgentLocation,
   Booking,
-  Payment,
-  PaymentStatus,
 } from 'src/database/entities';
 import { ACTIVE_STATUSES, ASSIGNABLE } from 'src/common/booking/booking-status';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
+import { BookingClosureService, couponNote } from 'src/common/booking/booking-closure.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { DispatchService } from 'src/dispatch/dispatch.service';
 import { ListAdminBookingsDto } from './dto/list-bookings.dto';
@@ -62,8 +61,6 @@ export class AdminBookingsService {
     @InjectRepository(Booking)
     private readonly bookingRepo: Repository<Booking>,
     @InjectRepository(Agent) private readonly agentRepo: Repository<Agent>,
-    @InjectRepository(Payment)
-    private readonly paymentRepo: Repository<Payment>,
     @InjectRepository(AgentLocation)
     private readonly locationRepo: Repository<AgentLocation>,
     private readonly history: BookingHistoryService,
@@ -71,6 +68,7 @@ export class AdminBookingsService {
     private readonly notifications: NotificationDispatchService,
     private readonly access: AdminAccessService,
     private readonly dispatch: DispatchService,
+    private readonly closure: BookingClosureService,
   ) {}
 
   async list(query: ListAdminBookingsDto) {
@@ -400,42 +398,42 @@ export class AdminBookingsService {
 
   async cancel(adminId: string, id: string, dto: CancelAdminBookingDto) {
     const booking = await this.requireBooking(id);
-    const payment = await this.paymentRepo.findOne({
-      where: { bookingId: booking.id },
-    });
-
     const oldData = {
       status: booking.status,
       paymentStatus: booking.paymentStatus,
     };
 
-    // A collected payment has to be refunded; anything unpaid is just voided.
-    const nextPaymentStatus: PaymentStatus =
-      payment?.paymentStatus === 'PAID' || booking.paymentStatus === 'PAID'
-        ? 'REFUNDED'
-        : 'VOIDED';
+    // One transaction: status, payment (REFUNDED to the wallet, or VOIDED) and history.
+    const closed = await this.closure.close(booking.id, 'cancelled', {
+      reason: 'BOOKING_CANCELLED',
+      changedBy: adminId,
+      remarks: dto.reason,
+    });
+    if (!closed) throw new NotFoundException('Booking not found');
+    const { refundedToWallet, paymentStatus, releasedCoupons } = closed;
 
-    booking.paymentStatus = nextPaymentStatus;
-    await this.history.transition(booking, 'cancelled', adminId, dto.reason);
-
-    if (payment) {
-      payment.paymentStatus = nextPaymentStatus;
-      await this.paymentRepo.save(payment);
-    }
-
-    const recipients = [booking.customer.userId];
-    if (booking.agentId) {
-      const agent = await this.agentRepo.findOne({
-        where: { id: booking.agentId },
-        select: ['id', 'userId'],
-      });
-      if (agent) recipients.push(agent.userId);
-    }
-    await this.notifications.toUsers(recipients, {
+    const cancelled = `Booking ${booking.bookingNumber} has been cancelled. Reason: ${dto.reason}`;
+    await this.notifications.toUser(booking.customer.userId, {
       title: 'Booking cancelled',
-      message: `Booking ${booking.bookingNumber} has been cancelled. Reason: ${dto.reason}`,
+      message:
+        (refundedToWallet > 0
+          ? `${cancelled}. ₹${refundedToWallet} has been added to your wallet.`
+          : cancelled) + couponNote(releasedCoupons),
       type: 'booking',
     });
+    if (closed.booking.agentId) {
+      const agent = await this.agentRepo.findOne({
+        where: { id: closed.booking.agentId },
+        select: ['id', 'userId'],
+      });
+      if (agent) {
+        await this.notifications.toUser(agent.userId, {
+          title: 'Booking cancelled',
+          message: cancelled,
+          type: 'booking',
+        });
+      }
+    }
 
     await this.audit.record({
       userId: adminId,
@@ -444,8 +442,10 @@ export class AdminBookingsService {
       entityId: booking.id,
       oldData,
       newData: {
-        status: booking.status,
-        paymentStatus: booking.paymentStatus,
+        status: closed.booking.status,
+        paymentStatus,
+        refundedToWallet,
+        releasedCoupons,
         reason: dto.reason,
       },
     });
@@ -453,12 +453,15 @@ export class AdminBookingsService {
     return {
       bookingId: booking.id,
       bookingNumber: booking.bookingNumber,
-      status: booking.status,
-      paymentStatus: booking.paymentStatus,
+      status: closed.booking.status,
+      paymentStatus,
+      refundedToWallet,
       message:
-        nextPaymentStatus === 'REFUNDED'
-          ? 'Booking cancelled and the payment marked for refund.'
-          : 'Booking cancelled and the pending payment voided.',
+        refundedToWallet > 0
+          ? `Booking cancelled and ₹${refundedToWallet} refunded to the customer's wallet.`
+          : paymentStatus === 'REFUNDED'
+            ? 'Booking cancelled and the payment marked as refunded.'
+            : 'Booking cancelled and the pending payment voided.',
     };
   }
 
