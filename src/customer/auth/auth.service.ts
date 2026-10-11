@@ -6,6 +6,7 @@ import { IdentityService } from 'src/common/auth/identity.service';
 import { OtpService } from 'src/common/auth/otp.service';
 import { TokenService } from 'src/common/auth/token.service';
 import { AuthUser } from 'src/common/types/auth.types';
+import type { OtpDeliveryChannel } from 'src/common/types/otp.types';
 
 const PURPOSE = 'customer_login' as const;
 
@@ -19,12 +20,12 @@ export class CustomerAuthService {
     private readonly tokens: TokenService,
   ) {}
 
-  sendOtp(mobile: string) {
-    return this.otp.send(mobile, PURPOSE);
+  sendOtp(mobile: string, channel?: OtpDeliveryChannel) {
+    return this.otp.send(mobile, PURPOSE, { channel });
   }
 
-  resendOtp(mobile: string) {
-    return this.otp.send(mobile, PURPOSE, { isResend: true });
+  resendOtp(mobile: string, channel?: OtpDeliveryChannel) {
+    return this.otp.send(mobile, PURPOSE, { isResend: true, channel });
   }
 
   async verifyOtp(mobile: string, otp: string) {

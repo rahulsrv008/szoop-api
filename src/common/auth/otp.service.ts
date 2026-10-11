@@ -14,6 +14,7 @@ import { OtpVerification } from 'src/database/entities';
 import { CustomLoggerService } from 'src/common/utils/logger.service';
 import { SmsService } from 'src/integrations/sms/sms.service';
 import { maskMobile, RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
+import type { OtpDeliveryChannel } from 'src/common/types/otp.types';
 
 export type OtpPurpose = 'customer_login' | 'agent_login';
 
@@ -52,7 +53,7 @@ export class OtpService {
   async send(
     mobile: string,
     purpose: OtpPurpose,
-    options: { isResend?: boolean } = {},
+    options: { isResend?: boolean; channel?: OtpDeliveryChannel } = {},
   ): Promise<OtpChallenge> {
     const ttl = this.ttlSeconds();
     const resendInterval = this.resendIntervalSeconds();
@@ -114,8 +115,8 @@ export class OtpService {
       );
     } else {
       const sms = useTwilio
-        ? await this.sms.sendOtp(mobile, '')
-        : await this.sms.sendOtp(mobile, code);
+        ? await this.sms.sendOtp(mobile, '', options.channel)
+        : await this.sms.sendOtp(mobile, code, options.channel);
       if (!sms.delivered) {
         throw new InternalServerErrorException(
           sms.error || 'Could not send OTP SMS. Try again in a moment.',
