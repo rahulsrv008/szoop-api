@@ -37,7 +37,7 @@ export class CustomerProfileService {
     if (dto.gender !== undefined) customer.gender = dto.gender;
     if (dto.dateOfBirth !== undefined) customer.dateOfBirth = dto.dateOfBirth;
     if (dto.profileImage !== undefined)
-      customer.profileImage = dto.profileImage;
+      customer.profileImage = dto.profileImage ? dto.profileImage : null;
 
     await this.customerRepo.save(customer);
     return this.toResponse(customer);
