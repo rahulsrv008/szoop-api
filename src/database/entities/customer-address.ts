@@ -50,6 +50,10 @@ export class CustomerAddress {
   @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
   longitude: string | null;
 
+  /** H3 res-8 cell of (latitude, longitude); powers the agent job-radius lookup. */
+  @Column({ name: 'h3_cell', type: 'varchar', length: 16, nullable: true })
+  h3Cell: string | null;
+
   @Column({ name: 'service_area_id', type: 'uuid', nullable: true })
   serviceAreaId: string | null;
 

@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SystemSetting } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { SettingsService } from 'src/common/services/settings.service';
 import { UpdateAdminSettingDto } from './dto/update-setting.dto';
@@ -15,14 +16,17 @@ export class AdminSettingsService {
     private readonly settingRepo: Repository<SystemSetting>,
     private readonly settings: SettingsService,
     private readonly audit: AuditService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list() {
+    this.access.assertSuperAdmin();
     const rows = await this.settings.list();
     return { items: rows.map((row) => this.toResponse(row)) };
   }
 
   async get(key: string) {
+    this.access.assertSuperAdmin();
     const row = await this.settingRepo.findOne({
       where: { settingKey: key },
     });
@@ -31,6 +35,7 @@ export class AdminSettingsService {
   }
 
   async set(adminId: string, key: string, dto: UpdateAdminSettingDto) {
+    this.access.assertSuperAdmin();
     const existing = await this.settingRepo.findOne({
       where: { settingKey: key },
     });
@@ -56,6 +61,7 @@ export class AdminSettingsService {
 
   /** One audit entry carries the whole diff of a bulk edit. */
   async bulkSet(adminId: string, dto: BulkUpdateAdminSettingsDto) {
+    this.access.assertSuperAdmin();
     const keys = dto.settings.map((entry) => entry.key);
     const existingRows = await this.settings.list();
     const existingByKey = new Map(

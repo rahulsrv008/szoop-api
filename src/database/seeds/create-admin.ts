@@ -1,3 +1,4 @@
+import 'src/config/timezone';
 import 'dotenv/config';
 import * as bcrypt from 'bcryptjs';
 import { AppDataSource } from 'src/data-source';

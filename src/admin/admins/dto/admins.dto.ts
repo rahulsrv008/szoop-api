@@ -1,10 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayUnique,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsIn,
   IsOptional,
   IsString,
+  IsUUID,
   MinLength,
 } from 'class-validator';
 import { BooleanQuery } from 'src/admin/admin.transforms';
@@ -55,6 +58,16 @@ export class CreateAdminDto {
   @IsOptional()
   @IsIn([...ADMIN_ROLES])
   role?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Zones this admin can see. Required unless the role is SUPER_ADMIN.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  zoneIds?: string[];
 }
 
 export class UpdateAdminDto {
@@ -84,4 +97,11 @@ export class UpdateAdminDto {
   @IsString()
   @MinLength(8)
   password?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  zoneIds?: string[];
 }

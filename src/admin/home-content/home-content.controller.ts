@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ROUTES } from 'src/app.routes';
@@ -20,6 +21,7 @@ import {
   UpdateHomeCategoryDto,
   UpdateHomeCategoryOptionDto,
   UpdateHomePopularItemDto,
+  UpdateHomeScreenDto,
 } from './dto/home-content.dto';
 
 @ApiTags('admin')
@@ -32,6 +34,21 @@ export class AdminHomeContentController {
   @ApiOperation({ summary: 'Customer home categories with their options' })
   listCategories() {
     return this.homeContent.listCategories();
+  }
+
+  @Get('screen')
+  @ApiOperation({ summary: 'Customer front-page copy: offers, trust, how it works' })
+  getScreen() {
+    return this.homeContent.getScreen();
+  }
+
+  @Put('screen')
+  @ApiOperation({ summary: 'Save the customer front-page sections' })
+  updateScreen(
+    @CurrentUser('sub') adminId: string,
+    @Body() dto: UpdateHomeScreenDto,
+  ) {
+    return this.homeContent.updateScreen(adminId, dto);
   }
 
   @Post('categories')

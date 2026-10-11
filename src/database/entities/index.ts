@@ -4,6 +4,7 @@ export { Customer } from './customer';
 export { Agent } from './agent';
 export type { AgentCurrentLocation } from './agent';
 export { Admin } from './admin';
+export { AdminZone } from './admin-zone';
 export { OtpVerification } from './otp-verification';
 export { RefreshToken } from './refresh-token';
 export { DeviceToken } from './device-token';
@@ -16,7 +17,9 @@ export { ServiceZoneArea } from './service-zone-area';
 export { ServicePricing } from './service-pricing';
 export { Society } from './society';
 export { Booking } from './booking';
-export type { BookingStatus } from './booking';
+export type { BookingMode, BookingStatus, PaymentMode } from './booking';
+export { WalletTransaction } from './wallet-transaction';
+export type { WalletTransactionReason, WalletTransactionType } from './wallet-transaction';
 export { BookingVisit } from './booking-visit';
 export type { BookingVisitShift, BookingVisitStatus } from './booking-visit';
 export { BookingItem } from './booking-item';
@@ -65,3 +68,9 @@ export type {
   PayoutStatus,
 } from './booking-settlement';
 export { BookingCustomerFeedback } from './booking-customer-feedback';
+export { BookingOffer } from './booking-offer';
+export type { BookingOfferStatus } from './booking-offer';
+export { BookingDispatch } from './booking-dispatch';
+export type { BookingDispatchStatus } from './booking-dispatch';
+export { UpcomingCity } from './upcoming-city';
+export { CityWaitlist } from './city-waitlist';

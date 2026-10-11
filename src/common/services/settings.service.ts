@@ -17,6 +17,7 @@ export const SETTING_KEYS = {
   COOK_BOTH_PER_PERSON: 'cook_both_per_person',
   COOK_EXTRA_PERSON_DISCOUNT_PERCENT: 'cook_extra_person_discount_percent',
   COOK_CLEANING_MONTHLY: 'cook_cleaning_monthly',
+  CUSTOMER_HOME_SCREEN: 'customer_home_screen',
 } as const;
 
 const CACHE_TTL_MS = 30_000;

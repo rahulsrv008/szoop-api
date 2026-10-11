@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Agent, AgentBankAccount, AgentDocument } from 'src/database/entities';
 import { AgentContextService } from '../shared/agent-context.service';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
+import { h3CellOf } from 'src/common/geo/geo.util';
 import { CreateAgentRegistrationDto } from './dto/create-registration.dto';
 import { UpdateAgentPersonalDetailsDto } from './dto/update-personal-details.dto';
 import { SaveAgentAddressDto } from './dto/save-address.dto';
@@ -79,12 +80,14 @@ export class AgentRegistrationService {
       city: agent.city,
     });
     agent.homeZoneId = zone?.id ?? null;
+    agent.homeH3Cell = h3CellOf(agent.latitude, agent.longitude);
     if (agent.latitude != null && agent.longitude != null) {
       agent.currentLocation = {
         latitude: Number(agent.latitude),
         longitude: Number(agent.longitude),
         recordedAt: new Date().toISOString(),
       };
+      agent.currentH3Cell = h3CellOf(agent.latitude, agent.longitude);
     }
 
     await this.agentRepo.save(agent);

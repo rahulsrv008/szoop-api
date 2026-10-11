@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { AgentAttendance } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminAttendanceDto } from './dto/list-attendance.dto';
 import { AdminAttendanceReportDto } from './dto/attendance-report.dto';
@@ -50,6 +51,7 @@ export class AdminAttendanceService {
   constructor(
     @InjectRepository(AgentAttendance)
     private readonly attendanceRepo: Repository<AgentAttendance>,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list(query: ListAdminAttendanceDto) {
@@ -216,6 +218,7 @@ export class AdminAttendanceService {
     if (query.to) {
       qb.andWhere('attendance.attendanceDate <= :to', { to: query.to });
     }
+    this.access.restrictAgent(qb, 'agent');
     return qb;
   }
 

@@ -9,12 +9,15 @@ import { AdminLoginDto } from './dto/login.dto';
 import { AdminRefreshTokenDto } from './dto/refresh-token.dto';
 import { AdminLogoutDto } from './dto/logout.dto';
 import { AdminChangePasswordDto } from './dto/change-password.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('admin')
 @Controller(ROUTES.ADMIN.AUTH)
 export class AdminAuthController {
   constructor(private readonly authService: AdminAuthService) {}
 
+  @RateLimit(RATE_LIMITS.ADMIN_LOGIN)
   @Post('login')
   @HttpCode(200)
   @ApiOperation({ summary: 'Admin Web login with email and password' })
@@ -46,6 +49,7 @@ export class AdminAuthController {
     return this.authService.me(adminId);
   }
 
+  @RateLimit(RATE_LIMITS.ADMIN_CHANGE_PASSWORD)
   @Post('change-password')
   @HttpCode(200)
   @AdminAuth()

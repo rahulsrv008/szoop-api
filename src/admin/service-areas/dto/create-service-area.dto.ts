@@ -26,7 +26,7 @@ export class ServiceZoneAreaItemDto {
   area: string;
 
   @ApiProperty({ example: '201301' })
-  @Matches(PINCODE_REGEX, { message: 'pincode must be 6 digits' })
+  @Matches(PINCODE_REGEX, { message: 'Enter a valid 6-digit PIN code' })
   pincode: string;
 
   @ApiPropertyOptional({ type: [String], example: ['High-rise societies'] })
@@ -70,7 +70,7 @@ export class CreateAdminServiceAreaDto {
 
   @ApiPropertyOptional({ example: '201301' })
   @IsOptional()
-  @Matches(PINCODE_REGEX, { message: 'pincode must be 6 digits' })
+  @Matches(PINCODE_REGEX, { message: 'Enter a valid 6-digit PIN code' })
   pincode?: string;
 
   @ApiPropertyOptional({ example: 28.59 })

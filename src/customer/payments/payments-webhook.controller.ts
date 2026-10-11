@@ -3,12 +3,14 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { ROUTES } from 'src/app.routes';
 import { CustomerPaymentsService } from './payments.service';
+import { NoRateLimit } from 'src/common/rate-limit/rate-limit.decorator';
 
 /**
  * Public gateway callback — no auth decorator. The payload is arbitrary JSON,
  * so it is taken untyped and every property access is guarded in the service.
  */
 @ApiTags('customer')
+@NoRateLimit()
 @Controller(ROUTES.WEBHOOKS.PAYMENTS)
 export class CustomerPaymentsWebhookController {
   constructor(private readonly paymentsService: CustomerPaymentsService) {}

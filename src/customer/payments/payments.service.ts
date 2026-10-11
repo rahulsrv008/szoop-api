@@ -6,16 +6,21 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Booking, Payment, PaymentTransaction } from 'src/database/entities';
+import { Booking, BookingStatusHistory, Payment, PaymentTransaction } from 'src/database/entities';
 import { IdentityService } from 'src/common/auth/identity.service';
-import { BookingHistoryService } from 'src/common/booking/booking-history.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
+import { WalletService } from 'src/common/services/wallet.service';
+import { MAX_PAYMENT_ATTEMPTS, PAYMENT_WINDOW_MINUTES } from 'src/common/booking/booking-status';
 import { CustomLoggerService } from 'src/common/utils/logger.service';
 import { RazorpayService } from 'src/integrations/payments/razorpay.service';
+import { DispatchService } from 'src/dispatch/dispatch.service';
 import { CreateCustomerPaymentDto } from './dto/create-payment.dto';
 import { VerifyCustomerPaymentDto } from './dto/verify-payment.dto';
 
 const GATEWAY = 'razorpay';
+
+/** Bookings that can't take a payment any more. */
+const CLOSED: Booking['status'][] = ['cancelled', 'expired'];
 
 @Injectable()
 export class CustomerPaymentsService {
@@ -27,16 +32,29 @@ export class CustomerPaymentsService {
     @InjectRepository(PaymentTransaction)
     private readonly transactionRepo: Repository<PaymentTransaction>,
     private readonly identity: IdentityService,
-    private readonly history: BookingHistoryService,
     private readonly notifications: NotificationDispatchService,
     private readonly razorpay: RazorpayService,
     private readonly logger: CustomLoggerService,
+    private readonly dispatch: DispatchService,
+    private readonly wallet: WalletService,
   ) {}
 
   async createOrder(userId: string, dto: CreateCustomerPaymentDto) {
     const customerId = await this.identity.requireCustomerId(userId);
     const booking = await this.findOwnBooking(customerId, dto.bookingId);
 
+    if (CLOSED.includes(booking.status)) {
+      throw new BadRequestException('This booking is closed. Please book again.');
+    }
+    if (booking.bookingMode === 'INSTANT' && booking.status === 'finding' && slotStart(booking) <= Date.now()) {
+      throw new BadRequestException('This "Right now" slot has passed. Please book again.');
+    }
+    if (
+      booking.status === 'finding' &&
+      Date.now() - booking.createdAt.getTime() > PAYMENT_WINDOW_MINUTES * 60_000
+    ) {
+      throw new BadRequestException('This booking request has timed out. Please book again.');
+    }
     if (
       booking.paymentStatus === 'PAID' ||
       booking.payment?.paymentStatus === 'PAID'
@@ -50,6 +68,17 @@ export class CustomerPaymentsService {
     }
 
     const payment = await this.ensurePayment(booking, customerId);
+    // An unconfirmed request gets MAX_PAYMENT_ATTEMPTS online tries (one order each).
+    if (booking.status === 'finding') {
+      const attempts = await this.transactionRepo.count({
+        where: { paymentId: payment.id, status: 'created' },
+      });
+      if (attempts >= MAX_PAYMENT_ATTEMPTS) {
+        throw new BadRequestException(
+          `Payment failed ${MAX_PAYMENT_ATTEMPTS} times. Confirm it as pay after service if offered, or book again.`,
+        );
+      }
+    }
     if (dto.paymentMethod) {
       payment.paymentMethod = dto.paymentMethod;
       await this.paymentRepo.save(payment);
@@ -96,29 +125,22 @@ export class CustomerPaymentsService {
     }
 
     const payment = await this.ensurePayment(booking, customerId);
-    await this.markPaid(payment, dto.razorpayPaymentId, {
+    const captured = await this.capture(booking.id, payment.id, dto.razorpayPaymentId, {
       razorpayOrderId: dto.razorpayOrderId,
       razorpayPaymentId: dto.razorpayPaymentId,
       verified: check.verified,
       signatureSkipped: check.skipped,
-    });
-    await this.settleBooking(booking, userId, 'Payment captured');
-
-    await this.notifications.toUser(userId, {
-      title: 'Payment received',
-      message: `We received ${Number(booking.totalAmount).toFixed(2)} for booking ${booking.bookingNumber}. We are finding an agent for you.`,
-      type: 'payment',
-      data: { bookingId: booking.id, bookingNumber: booking.bookingNumber },
-    });
+    }, userId, 'Payment captured');
 
     return {
       bookingId: booking.id,
       bookingNumber: booking.bookingNumber,
-      status: booking.status,
-      paymentStatus: booking.paymentStatus,
+      status: captured.booking.status,
+      paymentStatus: captured.booking.paymentStatus,
       totalAmount: Number(booking.totalAmount),
       paymentId: payment.id,
-      paidAt: payment.paidAt,
+      paidAt: captured.payment.paidAt,
+      refundedToWallet: captured.refundedToWallet,
     };
   }
 
@@ -163,8 +185,6 @@ export class CustomerPaymentsService {
     const booking = payment.booking ?? null;
 
     if (event === 'payment.failed') {
-      payment.paymentStatus = 'FAILED';
-      await this.paymentRepo.save(payment);
       await this.transactionRepo.save(
         this.transactionRepo.create({
           paymentId: payment.id,
@@ -174,19 +194,20 @@ export class CustomerPaymentsService {
           status: 'failed',
         }),
       );
-      if (booking) {
-        booking.paymentStatus = 'FAILED';
-        await this.bookingRepo.save(booking);
+      // A failure for an earlier attempt can arrive after the payment settled
+      // (paid, refunded or voided): never downgrade that.
+      if (payment.paymentStatus !== 'PENDING' && payment.paymentStatus !== 'FAILED') {
+        return { received: true };
       }
+      await this.paymentRepo.update({ id: payment.id }, { paymentStatus: 'FAILED' });
+      // Only the payment status: the booking loaded with this webhook may be stale.
+      if (booking) await this.bookingRepo.update({ id: booking.id }, { paymentStatus: 'FAILED' });
       return { received: true };
     }
 
     const gatewayPaymentId =
       typeof entity?.id === 'string' ? entity.id : orderId;
-    await this.markPaid(payment, gatewayPaymentId, body);
-    if (booking) {
-      await this.settleBooking(booking, null, 'Payment captured (webhook)');
-    }
+    await this.capture(payment.bookingId, payment.id, gatewayPaymentId, body, null, 'Payment captured (webhook)');
     return { received: true };
   }
 
@@ -214,40 +235,127 @@ export class CustomerPaymentsService {
     return payment;
   }
 
-  private async markPaid(
-    payment: Payment,
+  /**
+   * Records captured money. The booking is locked first, so a cancel or the
+   * unpaid-request timeout can't cross it: an open request becomes a paid
+   * (confirmed) booking; a closed one gets the money back in the wallet,
+   * unless it was refunded already (the same payment arriving again).
+   */
+  private async capture(
+    bookingId: string,
+    paymentId: string,
     gatewayTransactionId: string,
     gatewayResponse: Record<string, unknown>,
-  ) {
-    payment.paymentStatus = 'PAID';
-    payment.paidAt = payment.paidAt ?? new Date();
-    payment.paymentMethod = payment.paymentMethod ?? GATEWAY;
-    await this.paymentRepo.save(payment);
-
-    await this.transactionRepo.save(
-      this.transactionRepo.create({
-        paymentId: payment.id,
-        gatewayName: GATEWAY,
-        gatewayTransactionId,
-        gatewayResponse,
-        status: 'captured',
-      }),
-    );
-  }
-
-  /** Mirrors the payment onto the booking and moves finding → paid once. */
-  private async settleBooking(
-    booking: Booking,
     changedBy: string | null,
     remarks: string,
   ) {
-    booking.paymentStatus = 'PAID';
-    if (booking.status === 'finding') {
-      await this.history.transition(booking, 'paid', changedBy, remarks);
-      return;
+    const result = await this.bookingRepo.manager.transaction(async (manager) => {
+      const booking = await manager.findOneOrFail(Booking, {
+        where: { id: bookingId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      const payment = await manager.findOneOrFail(Payment, {
+        where: { id: paymentId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      await manager.save(
+        manager.create(PaymentTransaction, {
+          paymentId,
+          gatewayName: GATEWAY,
+          gatewayTransactionId,
+          gatewayResponse,
+          status: 'captured',
+        }),
+      );
+      payment.paidAt = payment.paidAt ?? new Date();
+      payment.paymentMethod = payment.paymentMethod ?? GATEWAY;
+
+      if (CLOSED.includes(booking.status)) {
+        if (payment.paymentStatus === 'REFUNDED') {
+          return { booking, payment, refundedToWallet: 0, opened: false, dueCleared: 0 };
+        }
+        const refundedToWallet = await this.wallet.refundBooking(
+          booking,
+          { amount: payment.amount, paymentStatus: 'PAID' },
+          booking.status === 'expired' ? 'BOOKING_EXPIRED' : 'BOOKING_CANCELLED',
+          manager,
+        );
+        payment.paymentStatus = 'REFUNDED';
+        booking.paymentStatus = 'REFUNDED';
+        await manager.save(payment);
+        await manager.update(Booking, { id: bookingId }, { paymentStatus: 'REFUNDED' });
+        return { booking, payment, refundedToWallet, opened: false, dueCleared: 0 };
+      }
+
+      payment.paymentStatus = 'PAID';
+      booking.paymentStatus = 'PAID';
+      await manager.save(payment);
+      const opened = booking.status === 'finding';
+      if (opened) {
+        // Older data may already carry an agent from before payment: hand the
+        // job straight to them instead of leaving it 'paid' with an agent.
+        const next = booking.agentId ? 'accepted' : 'paid';
+        await manager.save(manager.create(BookingStatusHistory, { bookingId, status: 'paid', changedBy, remarks }));
+        if (next === 'accepted') {
+          await manager.save(
+            manager.create(BookingStatusHistory, {
+              bookingId,
+              status: 'accepted',
+              changedBy,
+              remarks: 'Agent was assigned before payment',
+            }),
+          );
+        }
+        booking.status = next;
+      }
+      await manager.update(Booking, { id: bookingId }, { status: booking.status, paymentStatus: 'PAID' });
+      // Paid after the job was completed unpaid: clear what the wallet says they owe.
+      const dueCleared =
+        booking.status === 'completed' ? await this.wallet.settleDue(bookingId, manager) : 0;
+      return { booking, payment, refundedToWallet: 0, opened, dueCleared };
+    });
+
+    const { booking } = result;
+    const owner = await this.bookingRepo.findOne({ where: { id: bookingId }, relations: ['customer'] });
+    const userId = owner?.customer?.userId;
+    if (result.opened && booking.status === 'paid') await this.dispatch.kick(bookingId);
+    if (userId && result.opened) {
+      await this.notifications
+        .toUser(userId, {
+          title: 'Payment received',
+          message: `We received ${Number(booking.totalAmount).toFixed(2)} for booking ${booking.bookingNumber}. We are finding an agent for you.`,
+          type: 'payment',
+          data: { bookingId, bookingNumber: booking.bookingNumber },
+        })
+        .catch(() => undefined);
     }
-    await this.bookingRepo.save(booking);
+    if (userId && result.dueCleared > 0) {
+      await this.notifications
+        .toUser(userId, {
+          title: 'Payment received',
+          message: `Thanks! The ₹${result.dueCleared} due for booking ${booking.bookingNumber} is cleared.`,
+          type: 'wallet_due_paid',
+          data: { bookingId, bookingNumber: booking.bookingNumber },
+        })
+        .catch(() => undefined);
+    }
+    if (userId && result.refundedToWallet > 0) {
+      await this.notifications
+        .toUser(userId, {
+          title: 'Refund added to your wallet',
+          message: `Booking ${booking.bookingNumber} was already closed, so the ₹${result.refundedToWallet} you paid has been added to your wallet.`,
+          type: 'wallet_refund',
+          data: { bookingId, bookingNumber: booking.bookingNumber },
+        })
+        .catch(() => undefined);
+    }
+    return result;
   }
+}
+
+/** The booking's slot start (server time is India time). */
+function slotStart(booking: Booking) {
+  return new Date(`${String(booking.bookingDate).slice(0, 10)}T${booking.startTime}`).getTime();
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -10,6 +10,7 @@ import {
   Payment,
   Rating,
 } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AdminReportRangeDto } from './dto/report-range.dto';
 
 const DEFAULT_RANGE_DAYS = 30;
@@ -45,6 +46,7 @@ export class AdminReportsService {
     @InjectRepository(AgentAttendance)
     private readonly attendanceRepo: Repository<AgentAttendance>,
     @InjectRepository(Rating) private readonly ratingRepo: Repository<Rating>,
+    private readonly access: AdminAccessService,
   ) {}
 
   /** Summary-level roll-up of the four detailed reports. */
@@ -63,9 +65,10 @@ export class AdminReportsService {
         total: acc.total + row.total,
         completed: acc.completed + row.completed,
         cancelled: acc.cancelled + row.cancelled,
+        expired: acc.expired + row.expired,
         revenue: acc.revenue + row.revenue,
       }),
-      { total: 0, completed: 0, cancelled: 0, revenue: 0 },
+      { total: 0, completed: 0, cancelled: 0, expired: 0, revenue: 0 },
     );
 
     return {
@@ -74,6 +77,7 @@ export class AdminReportsService {
         total: bookingTotals.total,
         completed: bookingTotals.completed,
         cancelled: bookingTotals.cancelled,
+        expired: bookingTotals.expired,
         completedRevenue: Number(bookingTotals.revenue.toFixed(2)),
         days: bookings.length,
       },
@@ -115,9 +119,10 @@ export class AdminReportsService {
           total: acc.total + row.total,
           completed: acc.completed + row.completed,
           cancelled: acc.cancelled + row.cancelled,
+          expired: acc.expired + row.expired,
           revenue: Number((acc.revenue + row.revenue).toFixed(2)),
         }),
-        { total: 0, completed: 0, cancelled: 0, revenue: 0 },
+        { total: 0, completed: 0, cancelled: 0, expired: 0, revenue: 0 },
       ),
     };
   }
@@ -141,7 +146,7 @@ export class AdminReportsService {
   }
 
   private async bookingSeries(range: ResolvedRange) {
-    const rows = await this.bookingRepo
+    const bookingQb = this.bookingRepo
       .createQueryBuilder('booking')
       .select(`to_char(booking.bookingDate, 'YYYY-MM-DD')`, 'date')
       .addSelect('COUNT(*)::int', 'total')
@@ -154,6 +159,10 @@ export class AdminReportsService {
         'cancelled',
       )
       .addSelect(
+        `SUM(CASE WHEN booking.status = 'expired' THEN 1 ELSE 0 END)::int`,
+        'expired',
+      )
+      .addSelect(
         `COALESCE(SUM(CASE WHEN booking.status = 'completed' THEN booking.totalAmount ELSE 0 END), 0)`,
         'revenue',
       )
@@ -161,13 +170,18 @@ export class AdminReportsService {
         from: range.from,
         to: range.to,
       })
+      // Only confirmed bookings: unpaid requests (open or voided) never became one.
+      .andWhere("booking.status <> 'finding'")
+      .andWhere("booking.paymentStatus <> 'VOIDED'")
       .groupBy('booking.bookingDate')
-      .orderBy('booking.bookingDate', 'ASC')
-      .getRawMany<{
+      .orderBy('booking.bookingDate', 'ASC');
+    this.access.restrictZoneColumn(bookingQb, 'booking.service_area_id');
+    const rows = await bookingQb.getRawMany<{
         date: string;
         total: number;
         completed: number;
         cancelled: number;
+        expired: number;
         revenue: string;
       }>();
 
@@ -176,13 +190,15 @@ export class AdminReportsService {
       total: Number(row.total),
       completed: Number(row.completed),
       cancelled: Number(row.cancelled),
+      expired: Number(row.expired),
       revenue: Number(row.revenue),
     }));
   }
 
   private async revenueReport(range: ResolvedRange) {
-    const dailyRows = await this.paymentRepo
+    const dailyQb = this.paymentRepo
       .createQueryBuilder('payment')
+      .innerJoin('payment.booking', 'booking')
       .select(
         `to_char(COALESCE(payment.paidAt, payment.createdAt), 'YYYY-MM-DD')`,
         'date',
@@ -210,8 +226,9 @@ export class AdminReportsService {
       .orderBy(
         `to_char(COALESCE(payment.paidAt, payment.createdAt), 'YYYY-MM-DD')`,
         'ASC',
-      )
-      .getRawMany<{
+      );
+    this.access.restrictZoneColumn(dailyQb, 'booking.service_area_id');
+    const dailyRows = await dailyQb.getRawMany<{
         date: string;
         collected: string;
         pending: string;
@@ -219,7 +236,7 @@ export class AdminReportsService {
         count: number;
       }>();
 
-    const topServiceRows = await this.bookingItemRepo
+    const topQb = this.bookingItemRepo
       .createQueryBuilder('item')
       .innerJoin('item.booking', 'booking')
       .innerJoin('item.service', 'service')
@@ -235,8 +252,9 @@ export class AdminReportsService {
       .groupBy('item.serviceId')
       .addGroupBy('service.name')
       .orderBy('revenue', 'DESC')
-      .limit(5)
-      .getRawMany<{
+      .limit(5);
+    this.access.restrictZoneColumn(topQb, 'booking.service_area_id');
+    const topServiceRows = await topQb.getRawMany<{
         serviceId: string;
         serviceName: string;
         bookings: number;
@@ -275,7 +293,7 @@ export class AdminReportsService {
   }
 
   private async agentRows(range: ResolvedRange) {
-    const rows = await this.earningRepo
+    const earningQb = this.earningRepo
       .createQueryBuilder('earning')
       .innerJoin('earning.agent', 'agent')
       .select('earning.agentId', 'agentId')
@@ -292,8 +310,9 @@ export class AdminReportsService {
       .groupBy('earning.agentId')
       .addGroupBy('agent.firstName')
       .addGroupBy('agent.lastName')
-      .orderBy('revenue', 'DESC')
-      .getRawMany<{
+      .orderBy('revenue', 'DESC');
+    this.access.restrictAgent(earningQb, 'agent');
+    const rows = await earningQb.getRawMany<{
         agentId: string;
         firstName: string;
         lastName: string | null;
@@ -353,18 +372,22 @@ export class AdminReportsService {
   }
 
   private async customerReport(range: ResolvedRange) {
+    const access = this.access.current();
     const [newRows, repeatRow, spendRow, topRows] = await Promise.all([
-      this.customerRepo
-        .createQueryBuilder('customer')
-        .select(`to_char(customer.createdAt, 'YYYY-MM-DD')`, 'date')
-        .addSelect('COUNT(*)::int', 'count')
-        .where('customer.createdAt BETWEEN :start AND :end', {
-          start: range.start,
-          end: range.end,
-        })
-        .groupBy(`to_char(customer.createdAt, 'YYYY-MM-DD')`)
-        .orderBy(`to_char(customer.createdAt, 'YYYY-MM-DD')`, 'ASC')
-        .getRawMany<{ date: string; count: number }>(),
+      (() => {
+        const qb = this.customerRepo
+          .createQueryBuilder('customer')
+          .select(`to_char(customer.createdAt, 'YYYY-MM-DD')`, 'date')
+          .addSelect('COUNT(*)::int', 'count')
+          .where('customer.createdAt BETWEEN :start AND :end', {
+            start: range.start,
+            end: range.end,
+          })
+          .groupBy(`to_char(customer.createdAt, 'YYYY-MM-DD')`)
+          .orderBy(`to_char(customer.createdAt, 'YYYY-MM-DD')`, 'ASC');
+        this.access.restrictCustomer(qb, 'customer');
+        return qb.getRawMany<{ date: string; count: number }>();
+      })(),
       // Customers with more than one booking inside the window.
       this.bookingRepo.manager
         .createQueryBuilder()
@@ -375,26 +398,47 @@ export class AdminReportsService {
               .select('inner_booking.customer_id', 'customerId')
               .from('bookings', 'inner_booking')
               .where('inner_booking.booking_date BETWEEN :from AND :to')
+              .andWhere(
+                access.unrestricted
+                  ? '1 = 1'
+                  : access.zoneIds.length
+                    ? 'inner_booking.service_area_id IN (:...scopeZoneIds)'
+                    : '1 = 0',
+              )
               .groupBy('inner_booking.customer_id')
               .having('COUNT(*) > 1'),
           'repeat_customers',
         )
-        .setParameters({ from: range.from, to: range.to })
+        .setParameters({
+          from: range.from,
+          to: range.to,
+          scopeZoneIds: access.zoneIds.length
+            ? access.zoneIds
+            : ['00000000-0000-0000-0000-000000000000'],
+        })
         .getRawOne<{ count: number }>(),
-      this.paymentRepo
-        .createQueryBuilder('payment')
-        .select('COUNT(DISTINCT payment.customerId)::int', 'customers')
-        .addSelect('COALESCE(SUM(payment.amount), 0)', 'spend')
-        .where('payment.paymentStatus = :status', { status: 'PAID' })
-        .andWhere(
-          'COALESCE(payment.paidAt, payment.createdAt) BETWEEN :start AND :end',
-          { start: range.start, end: range.end },
-        )
-        .getRawOne<{ customers: number; spend: string }>(),
-      this.paymentRepo
-        .createQueryBuilder('payment')
-        .innerJoin('payment.customer', 'customer')
-        .innerJoin('customer.user', 'customerUser')
+      (() => {
+        const qb = this.paymentRepo
+          .createQueryBuilder('payment')
+          .innerJoin('payment.booking', 'booking')
+          .select('COUNT(DISTINCT payment.customerId)::int', 'customers')
+          .addSelect('COALESCE(SUM(payment.amount), 0)', 'spend')
+          .where('payment.paymentStatus = :status', { status: 'PAID' })
+          .andWhere(
+            'COALESCE(payment.paidAt, payment.createdAt) BETWEEN :start AND :end',
+            { start: range.start, end: range.end },
+          );
+        this.access.restrictZoneColumn(qb, 'booking.service_area_id');
+        return qb.getRawOne<{ customers: number; spend: string }>();
+      })(),
+      (() => {
+        const qb = this.paymentRepo
+          .createQueryBuilder('payment')
+          .innerJoin('payment.booking', 'booking')
+          .innerJoin('payment.customer', 'customer')
+          .innerJoin('customer.user', 'customerUser');
+        this.access.restrictZoneColumn(qb, 'booking.service_area_id');
+        return qb
         .select('payment.customerId', 'customerId')
         .addSelect('customer.firstName', 'firstName')
         .addSelect('customer.lastName', 'lastName')
@@ -419,7 +463,8 @@ export class AdminReportsService {
           mobile: string;
           payments: number;
           spend: string;
-        }>(),
+        }>();
+      })(),
     ]);
 
     const newCustomers = newRows.map((row) => ({

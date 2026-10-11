@@ -17,6 +17,7 @@ import {
 } from 'src/database/entities';
 import { AgentSharedModule } from '../shared/agent-shared.module';
 import { AgentSkillsModule } from '../skills/skills.module';
+import { DispatchModule } from 'src/dispatch/dispatch.module';
 import { AgentBookingsController } from './bookings.controller';
 import { AgentBookingsService } from './bookings.service';
 import { EnhancedBookingService } from './enhanced-booking.service';
@@ -41,6 +42,7 @@ import { ChecklistService } from 'src/common/services/checklist.service';
     ]),
     AgentSharedModule,
     AgentSkillsModule,
+    DispatchModule,
   ],
   controllers: [AgentBookingsController],
   providers: [AgentBookingsService, EnhancedBookingService, ChecklistService],

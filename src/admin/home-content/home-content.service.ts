@@ -12,7 +12,12 @@ import {
   HomePopularItem,
   HomePricingTier,
 } from 'src/database/entities';
+import { normalizeHomeScreen } from 'src/common/home-screen';
 import { AuditService } from 'src/common/services/audit.service';
+import {
+  SETTING_KEYS,
+  SettingsService,
+} from 'src/common/services/settings.service';
 import {
   CreateHomeCategoryDto,
   CreateHomeCategoryOptionDto,
@@ -22,6 +27,7 @@ import {
   UpdateHomeCategoryDto,
   UpdateHomeCategoryOptionDto,
   UpdateHomePopularItemDto,
+  UpdateHomeScreenDto,
 } from './dto/home-content.dto';
 
 type Nullable<T> = { [K in keyof T]: T[K] | null | undefined };
@@ -64,7 +70,26 @@ export class AdminHomeContentService {
     @InjectRepository(HomePopularItem)
     private readonly popularRepo: Repository<HomePopularItem>,
     private readonly audit: AuditService,
+    private readonly settings: SettingsService,
   ) {}
+
+  async getScreen() {
+    const stored = await this.settings.get(
+      SETTING_KEYS.CUSTOMER_HOME_SCREEN,
+      null,
+    );
+    return normalizeHomeScreen(stored);
+  }
+
+  async updateScreen(adminId: string, dto: UpdateHomeScreenDto) {
+    const screen = normalizeHomeScreen(dto);
+    await this.settings.set(SETTING_KEYS.CUSTOMER_HOME_SCREEN, screen, {
+      description: 'Customer app front page: offers, trust, how it works, and the bottom call to action.',
+      updatedBy: adminId,
+    });
+    await this.record(adminId, 'HOME_SCREEN_UPDATED', 'system_settings', null);
+    return screen;
+  }
 
   listCategories() {
     return this.categoryRepo.find({
@@ -230,7 +255,7 @@ export class AdminHomeContentService {
     return option;
   }
 
-  private record(adminId: string, action: string, entityType: string, entityId: string) {
+  private record(adminId: string, action: string, entityType: string, entityId: string | null) {
     return this.audit.record({
       userId: adminId,
       action,

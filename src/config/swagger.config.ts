@@ -1,4 +1,4 @@
-import { SecuritySchemeObject } from '@nestjs/swagger/dist/interfaces/open-api-spec.interface';
+import { SecuritySchemeObject } from '@nestjs/swagger';
 
 export const SwaggerConfig: SecuritySchemeObject = {
   type: 'http',

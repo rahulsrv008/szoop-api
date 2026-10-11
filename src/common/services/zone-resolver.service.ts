@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, IsNull, Repository } from 'typeorm';
+import { backfillH3Cells } from 'src/common/geo/h3-backfill';
 import {
   Agent,
   Customer,
@@ -25,6 +26,16 @@ CREATE INDEX IF NOT EXISTS idx_agents_home_zone ON agents (home_zone);
 CREATE INDEX IF NOT EXISTS idx_customers_home_zone ON customers (home_zone);
 CREATE INDEX IF NOT EXISTS idx_customer_addresses_service_area
   ON customer_addresses (service_area_id);
+
+-- H3 geo index for agent <-> job matching (mirrors sql/dispatch_geo.sql).
+ALTER TABLE customer_addresses ADD COLUMN IF NOT EXISTS h3_cell VARCHAR(16);
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS current_h3_cell VARCHAR(16);
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS home_h3_cell VARCHAR(16);
+CREATE INDEX IF NOT EXISTS idx_customer_addresses_h3_cell ON customer_addresses (h3_cell);
+CREATE INDEX IF NOT EXISTS idx_agents_current_h3_cell ON agents (current_h3_cell);
+CREATE INDEX IF NOT EXISTS idx_agents_home_h3_cell ON agents (home_h3_cell);
+CREATE INDEX IF NOT EXISTS idx_agent_locations_agent_recorded
+  ON agent_locations (agent_id, recorded_at DESC);
 `;
 
 export interface ZoneLookup {
@@ -42,9 +53,13 @@ export interface ZoneSummary {
   region: string | null;
 }
 
+/** How stale a zone change may be on other servers before they see it. */
+const ZONE_CACHE_MS = 60_000;
+
 @Injectable()
 export class ZoneResolverService implements OnModuleInit {
   private readonly logger = new Logger(ZoneResolverService.name);
+  private zonesCache: { at: number; rows: Promise<ServiceArea[]> } | null = null;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -66,6 +81,13 @@ export class ZoneResolverService implements OnModuleInit {
       await this.backfill();
     } catch (err) {
       this.logger.error('Failed to ensure agent/customer zone columns', err as Error);
+    }
+    try {
+      const filled = await backfillH3Cells(this.dataSource);
+      const total = filled.addresses + filled.agentLocations + filled.agentHomes;
+      if (total) this.logger.log(`Backfilled H3 cells: ${JSON.stringify(filled)}`);
+    } catch (err) {
+      this.logger.error('Failed to backfill H3 cells', err as Error);
     }
   }
 
@@ -138,9 +160,7 @@ export class ZoneResolverService implements OnModuleInit {
     }
 
     if (latitude != null && longitude != null) {
-      const zones = await this.areaRepo.find({
-        where: { isActive: true },
-      });
+      const zones = await this.activeZones();
       const within = zones
         .map((zone) => ({
           zone,
@@ -172,6 +192,28 @@ export class ZoneResolverService implements OnModuleInit {
     }
 
     return null;
+  }
+
+  /**
+   * Active zones, cached briefly: every location check needs all of them and
+   * they only change through the admin panel. Treat the rows as read-only.
+   */
+  private activeZones() {
+    const now = Date.now();
+    if (!this.zonesCache || now - this.zonesCache.at > ZONE_CACHE_MS) {
+      const rows = this.areaRepo.find({ where: { isActive: true } });
+      // One query even when many requests miss at once; a failed load isn't cached.
+      this.zonesCache = { at: now, rows };
+      rows.catch(() => {
+        if (this.zonesCache?.rows === rows) this.zonesCache = null;
+      });
+    }
+    return this.zonesCache.rows;
+  }
+
+  /** Call after zones change. Other servers pick the change up within ZONE_CACHE_MS. */
+  invalidateCache() {
+    this.zonesCache = null;
   }
 
   private async backfill() {

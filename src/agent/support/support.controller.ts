@@ -14,6 +14,8 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { AgentSupportService } from './support.service';
 import { CreateAgentSupportTicketDto } from './dto/create-ticket.dto';
 import { ListAgentSupportTicketsDto } from './dto/list-tickets.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('agent')
 @AgentAuth()
@@ -21,6 +23,7 @@ import { ListAgentSupportTicketsDto } from './dto/list-tickets.dto';
 export class AgentSupportController {
   constructor(private readonly supportService: AgentSupportService) {}
 
+  @RateLimit(RATE_LIMITS.SUPPORT_TICKET)
   @Post()
   @ApiOperation({ summary: 'Raise a support ticket' })
   create(

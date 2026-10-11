@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { Rating, Review } from 'src/database/entities';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminRatingsDto } from './dto/list-ratings.dto';
@@ -27,6 +28,7 @@ export class AdminRatingsService {
     @InjectRepository(Rating) private readonly ratingRepo: Repository<Rating>,
     @InjectRepository(Review) private readonly reviewRepo: Repository<Review>,
     private readonly audit: AuditService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list(query: ListAdminRatingsDto) {
@@ -122,6 +124,7 @@ export class AdminRatingsService {
       ],
     });
     if (!rating) throw new NotFoundException('Rating not found');
+    this.access.assertZone(rating.booking?.serviceAreaId, 'Rating');
 
     return {
       id: rating.id,
@@ -167,9 +170,10 @@ export class AdminRatingsService {
   async remove(adminId: string, id: string) {
     const rating = await this.ratingRepo.findOne({
       where: { id },
-      relations: ['reviews'],
+      relations: ['reviews', 'booking'],
     });
     if (!rating) throw new NotFoundException('Rating not found');
+    this.access.assertZone(rating.booking?.serviceAreaId, 'Rating');
 
     const oldData = {
       bookingId: rating.bookingId,
@@ -246,6 +250,7 @@ export class AdminRatingsService {
         to: new Date(`${query.to}T23:59:59.999Z`),
       });
     }
+    this.access.restrictZoneColumn(qb, 'booking.service_area_id');
     return qb;
   }
 

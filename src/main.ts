@@ -1,3 +1,4 @@
+import './config/timezone';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
@@ -36,7 +37,7 @@ export async function createServer(listen = !process.env.VERCEL) {
   const expressApp = app.getHttpAdapter().getInstance() as {
     set: (key: string, value: unknown) => void;
   };
-  expressApp.set('trust proxy', process.env.TRUST_PROXY === 'false' ? false : 1);
+  expressApp.set('trust proxy', trustProxySetting(process.env.TRUST_PROXY));
 
   app.use(
     helmet({
@@ -52,7 +53,12 @@ export async function createServer(listen = !process.env.VERCEL) {
         flags: 'a',
       });
   app.use(
-    morgan(process.env.MORGAN_FORMAT || 'combined', { stream: logStream }),
+    morgan(process.env.MORGAN_FORMAT || 'combined', {
+      stream: logStream,
+      // Rate-limited requests are counted in the per-minute "429 summary" log
+      // instead; during a flood one line per request would swamp the logs.
+      skip: (_req, res) => res.statusCode === 429,
+    }),
   );
 
   app.use(
@@ -210,6 +216,20 @@ export async function createServer(listen = !process.env.VERCEL) {
     );
     process.exit(1);
   }
+}
+
+/**
+ * How many proxy hops sit in front of the app, so req.ip is the real client
+ * (rate limits key on it). Number of hops (default 1), 'false', or a list of
+ * trusted subnets such as 'loopback, 10.0.0.0/8'. See docs/rate-limiting.md.
+ */
+function trustProxySetting(raw?: string): boolean | number | string {
+  const value = (raw ?? '').trim();
+  if (!value) return 1;
+  if (value === 'false') return false;
+  // 'true' has always meant one hop here; trusting every hop would let clients spoof X-Forwarded-For.
+  if (value === 'true') return 1;
+  return /^\d+$/.test(value) ? Number(value) : value;
 }
 
 if (!process.env.VERCEL) {

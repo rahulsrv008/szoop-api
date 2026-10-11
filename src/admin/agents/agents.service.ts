@@ -18,6 +18,7 @@ import {
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
 import { ListAdminAgentsDto } from './dto/list-agents.dto';
 import { ApproveAdminAgentDto } from './dto/approve-agent.dto';
@@ -25,6 +26,7 @@ import { AssignAdminAgentZonesDto } from './dto/assign-agent-zones.dto';
 import { RejectAdminAgentDto } from './dto/reject-agent.dto';
 import { SuspendAdminAgentDto } from './dto/suspend-agent.dto';
 import { VerifyAdminAgentDocumentDto } from './dto/verify-document.dto';
+import { todayString } from 'src/agent/shared/date.util';
 
 interface AgentListRow {
   agentId: string;
@@ -68,6 +70,7 @@ export class AdminAgentsService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
     private readonly zones: ZoneResolverService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list(query: ListAdminAgentsDto) {
@@ -183,9 +186,10 @@ export class AdminAgentsService {
         .createQueryBuilder('earning')
         .select('COALESCE(SUM(earning.earningAmount), 0)', 'total')
         .where('earning.agentId = :id', { id })
-        .andWhere(
-          `date_trunc('month', earning.earningDate) = date_trunc('month', CURRENT_DATE)`,
-        )
+        // Month from the app clock (pinned to APP_TIMEZONE), not the DB session's zone.
+        .andWhere(`date_trunc('month', earning.earningDate) = date_trunc('month', CAST(:today AS date))`, {
+          today: todayString(),
+        })
         .getRawOne<{ total: string }>(),
       this.earningRepo
         .createQueryBuilder('earning')
@@ -571,6 +575,7 @@ export class AdminAgentsService {
         to: new Date(`${query.to}T23:59:59.999Z`),
       });
     }
+    this.access.restrictAgent(qb, 'agent');
     return qb;
   }
 
@@ -593,6 +598,7 @@ export class AdminAgentsService {
       relations: ['user'],
     });
     if (!agent) throw new NotFoundException('Agent not found');
+    this.access.assertAgent(agent);
     return agent;
   }
 

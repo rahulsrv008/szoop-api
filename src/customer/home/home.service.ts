@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { HomeCategory, HomePopularItem } from 'src/database/entities';
+import { normalizeHomeScreen } from 'src/common/home-screen';
 import {
   SETTING_KEYS,
   SettingsService,
@@ -27,6 +28,7 @@ export class CustomerHomeService {
       bothPerPerson,
       extraPersonDiscountPercent,
       cleaningMonthly,
+      homeScreen,
     ] = await Promise.all([
       this.categoryRepo.find({
         where: { isActive: true },
@@ -47,10 +49,12 @@ export class CustomerHomeService {
       this.settings.getNumber(SETTING_KEYS.COOK_BOTH_PER_PERSON, 2000),
       this.settings.getNumber(SETTING_KEYS.COOK_EXTRA_PERSON_DISCOUNT_PERCENT, 10),
       this.settings.getNumber(SETTING_KEYS.COOK_CLEANING_MONTHLY, 1200),
+      this.settings.get(SETTING_KEYS.CUSTOMER_HOME_SCREEN, null),
     ]);
 
     return {
       taxPercent,
+      screen: normalizeHomeScreen(homeScreen),
       cookPricing: {
         morningPerPerson,
         eveningPerPerson,

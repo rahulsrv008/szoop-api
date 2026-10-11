@@ -107,6 +107,14 @@ export class Agent {
   @Column({ name: 'current_location', type: 'jsonb', nullable: true })
   currentLocation: AgentCurrentLocation | null;
 
+  /** H3 res-8 cell of currentLocation; kept in step with it on every write. */
+  @Column({ name: 'current_h3_cell', type: 'varchar', length: 16, nullable: true })
+  currentH3Cell: string | null;
+
+  /** H3 res-8 cell of the registered home address; the dispatcher's fallback when the GPS fix is stale. */
+  @Column({ name: 'home_h3_cell', type: 'varchar', length: 16, nullable: true })
+  homeH3Cell: string | null;
+
   @OneToMany(() => Booking, (booking) => booking.agent)
   bookings: Booking[];
 

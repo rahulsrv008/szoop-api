@@ -2,10 +2,12 @@ import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   Admin,
+  AdminZone,
   Agent,
   AuditLog,
   Booking,
   BookingStatusHistory,
+  CityWaitlist,
   Customer,
   CustomerAddress,
   DeviceToken,
@@ -15,7 +17,9 @@ import {
   ServiceArea,
   ServiceZoneArea,
   SystemSetting,
+  UpcomingCity,
   User,
+  WalletTransaction,
 } from 'src/database/entities';
 import { IdentityService } from './auth/identity.service';
 import { TokenService } from './auth/token.service';
@@ -25,6 +29,10 @@ import { NotificationDispatchService } from './services/notification-dispatch.se
 import { BookingHistoryService } from './booking/booking-history.service';
 import { SettingsService } from './services/settings.service';
 import { ZoneResolverService } from './services/zone-resolver.service';
+import { ServiceabilityService } from './services/serviceability.service';
+import { AdminAccessService } from './auth/admin-access';
+import { WalletService } from './services/wallet.service';
+import { BookingClosureService } from './booking/booking-closure.service';
 
 /**
  * Cross-app building blocks (identity, tokens, OTP, audit, notifications).
@@ -40,6 +48,7 @@ import { ZoneResolverService } from './services/zone-resolver.service';
       CustomerAddress,
       Agent,
       Admin,
+      AdminZone,
       OtpVerification,
       RefreshToken,
       Notification,
@@ -50,6 +59,9 @@ import { ZoneResolverService } from './services/zone-resolver.service';
       SystemSetting,
       ServiceArea,
       ServiceZoneArea,
+      UpcomingCity,
+      CityWaitlist,
+      WalletTransaction,
     ]),
   ],
   providers: [
@@ -61,6 +73,10 @@ import { ZoneResolverService } from './services/zone-resolver.service';
     BookingHistoryService,
     SettingsService,
     ZoneResolverService,
+    ServiceabilityService,
+    AdminAccessService,
+    WalletService,
+    BookingClosureService,
   ],
   exports: [
     IdentityService,
@@ -71,6 +87,10 @@ import { ZoneResolverService } from './services/zone-resolver.service';
     BookingHistoryService,
     SettingsService,
     ZoneResolverService,
+    ServiceabilityService,
+    AdminAccessService,
+    WalletService,
+    BookingClosureService,
   ],
 })
 export class CommonModule {}

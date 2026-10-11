@@ -14,7 +14,9 @@ import {
 } from 'src/database/entities';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
+import { AdminAccessService } from 'src/common/auth/admin-access';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
+import { WalletService } from 'src/common/services/wallet.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminCustomersDto } from './dto/list-customers.dto';
 import { UpdateAdminCustomerDto } from './dto/update-customer.dto';
@@ -49,6 +51,8 @@ export class AdminCustomersService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
     private readonly zones: ZoneResolverService,
+    private readonly wallet: WalletService,
+    private readonly access: AdminAccessService,
   ) {}
 
   async list(query: ListAdminCustomersDto) {
@@ -117,7 +121,7 @@ export class AdminCustomersService {
   async detail(id: string) {
     const customer = await this.requireCustomer(id);
 
-    const [addresses, statusRows, spent, recentBookings] = await Promise.all([
+    const [addresses, statusRows, spent, recentBookings, wallet] = await Promise.all([
       this.addressRepo.find({
         where: { customerId: id },
         relations: ['serviceArea'],
@@ -141,6 +145,7 @@ export class AdminCustomersService {
         order: { bookingDate: 'DESC', startTime: 'DESC' },
         take: 10,
       }),
+      this.wallet.statement(id, { page: 1, limit: 10 }),
     ]);
 
     const byStatus = statusRows.reduce<Record<string, number>>((acc, row) => {
@@ -195,6 +200,7 @@ export class AdminCustomersService {
         paymentStatus: booking.paymentStatus,
         totalAmount: Number(booking.totalAmount),
       })),
+      wallet: { balance: wallet.balance, recentTransactions: wallet.items },
     };
   }
 
@@ -330,6 +336,7 @@ export class AdminCustomersService {
         to: new Date(`${query.to}T23:59:59.999Z`),
       });
     }
+    this.access.restrictCustomer(qb, 'customer');
     return qb;
   }
 
@@ -339,6 +346,7 @@ export class AdminCustomersService {
       relations: ['user'],
     });
     if (!customer) throw new NotFoundException('Customer not found');
+    await this.access.assertCustomer(customer.id, customer.homeZoneId);
     return customer;
   }
 

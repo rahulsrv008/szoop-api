@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -10,6 +11,9 @@ import { HealthModule } from './health/health.module';
 import { CustomerModule } from './customer/customer.module';
 import { AgentModule } from './agent/agent.module';
 import { AdminModule } from './admin/admin.module';
+import { DispatchModule } from './dispatch/dispatch.module';
+import { AdminAccessInterceptor } from './common/auth/admin-access.interceptor';
+import { RateLimitModule } from './common/rate-limit/rate-limit.module';
 
 @Module({
   imports: [
@@ -26,13 +30,18 @@ import { AdminModule } from './admin/admin.module';
     DatabaseModule,
     IntegrationsModule,
     CommonModule,
+    RateLimitModule,
     HealthModule,
     // One app per client: /api/v1/customer/*, /api/v1/agent/*, /api/v1/admin/*
     CustomerModule,
     AgentModule,
     AdminModule,
+    DispatchModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    { provide: APP_INTERCEPTOR, useClass: AdminAccessInterceptor },
+  ],
 })
 export class AppModule {}

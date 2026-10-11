@@ -103,5 +103,18 @@ npm run start:dev
 
 ## Notes
 
+- **Rate limiting:** see [docs/rate-limiting.md](docs/rate-limiting.md). Set `REDIS_URL` and `TRUST_PROXY` in every deployed environment.
+
 - Schema SQL: `sql/001_full_schema.sql` (32 tables). Existing STG APIs still work against the new tables.
 - Keep `DB_SYNC=false` and create/update tables via that SQL in pgAdmin.
+
+## End-to-end tests
+
+`test/e2e/` boots the real app against a throwaway Postgres and walks the booking flow: creation, payment, push dispatch, the agent's job list, accept, the job lifecycle, releases, no-shows and admin actions. Each file rebuilds the schema, so the database name **must end in `_test`** (the harness refuses otherwise).
+
+```bash
+createdb clearit_test            # once, on a local Postgres
+npm run test:e2e                 # TEST_DB_HOST/PORT/USER/PASSWORD/NAME override the defaults (127.0.0.1:5432, postgres, clearit_test)
+```
+
+The suite runs under `TZ=UTC` on purpose, to prove booking times are still read as India time. Tests marked `todo` describe known open bugs; they're reported but don't fail the run.

@@ -14,6 +14,8 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { CustomerSupportService } from './support.service';
 import { CreateCustomerTicketDto } from './dto/create-ticket.dto';
 import { ListCustomerTicketsQueryDto } from './dto/list-tickets.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('customer')
 @CustomerAuth()
@@ -21,6 +23,7 @@ import { ListCustomerTicketsQueryDto } from './dto/list-tickets.dto';
 export class CustomerSupportController {
   constructor(private readonly supportService: CustomerSupportService) {}
 
+  @RateLimit(RATE_LIMITS.SUPPORT_TICKET)
   @Post()
   @ApiOperation({ summary: 'Raise a support ticket' })
   create(
