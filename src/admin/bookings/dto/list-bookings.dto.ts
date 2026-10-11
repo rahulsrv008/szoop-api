@@ -10,6 +10,7 @@ export const BOOKING_STATUSES = [
   'ongoing',
   'completed',
   'cancelled',
+  'expired',
 ];
 
 export const PAYMENT_STATUSES = [

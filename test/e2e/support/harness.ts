@@ -20,6 +20,8 @@ env.DB_NAME = env.TEST_DB_NAME ?? 'clearit_test';
 env.DB_SSL = 'false';
 env.DB_SCHEMA = 'public';
 env.DISPATCH_TICK_MS = '0';
+// Tests drive dispatch.tick() themselves; the request-driven tick has its own test.
+env.DISPATCH_REQUEST_TICK_SECONDS = '0';
 env.JWT_SECRET = env.JWT_SECRET || 'e2e-test-secret-not-for-real-use-0123456789';
 // Razorpay in stub mode, and no cron route unless a test sets the secret.
 delete env.RAZORPAY_KEY_ID;

@@ -16,6 +16,8 @@ import {
   startApp,
 } from './support/harness';
 import * as E from 'src/database/entities';
+import { In } from 'typeorm';
+import { WalletService } from 'src/common/services/wallet.service';
 import { DispatchService } from 'src/dispatch/dispatch.service';
 import { AgentBookingsService } from 'src/agent/bookings/bookings.service';
 import { AdminBookingsService } from 'src/admin/bookings/bookings.service';
@@ -60,25 +62,27 @@ describe('Push dispatch', () => {
 
     before(async () => {
       const zone = await f.zone();
-      await f.agent('w1', { live: north(base, 1), skills: [skill] });
-      await f.agent('w2', { live: north(base, 2), skills: [skill] });
-      await f.agent('w3', { live: north(base, 2.5), skills: [skill] });
-      await f.agent('w4', { live: north(base, 4), skills: [skill] });
+      await f.agent('w1', { live: north(base, 0.3), skills: [skill] });
+      await f.agent('w2', { live: north(base, 0.6), skills: [skill] });
+      await f.agent('w3', { live: north(base, 0.9), skills: [skill] });
+      await f.agent('w4', { live: north(base, 1.5), skills: [skill] });
       await f.agent('w5-zone', { skills: [skill], zones: [zone.id] });
-      await f.agent('w6', { live: north(base, 7), skills: [skill] });
+      await f.agent('w6', { live: north(base, 2.5), skills: [skill] });
+      await f.agent('w7', { live: north(base, 3.5), skills: [skill] });
+      await f.agent('w8-far', { live: north(base, 6), skills: [skill] });
       await f.agent('x-unskilled', { live: north(base, 0.5) });
       await f.agent('x-stale', { live: north(base, 0.3), staleFix: true, skills: [skill] });
       await f.agent('x-suspended', { live: north(base, 0.2), skills: [skill], status: 'SUSPENDED' });
       await f.agent('x-unapproved', { live: north(base, 0.2), skills: [skill], approvalStatus: 'PENDING' });
-      const off = await f.agent('x-off', { live: north(base, 1.5), skills: [skill] });
+      const off = await f.agent('x-off', { live: north(base, 0.4), skills: [skill] });
       await f.unavailable(off.id, tomorrow().date);
-      const busy = await f.agent('x-busy', { live: north(base, 1.2), skills: [skill] });
+      const busy = await f.agent('x-busy', { live: north(base, 0.7), skills: [skill] });
       await job(area(1.2), { status: 'accepted', agentId: busy.id, when: { date: tomorrow().date, time: '10:30:00' } });
       booking = await job(base, { zoneId: zone.id });
       await dispatch.kick(booking.id);
     });
 
-    it('wave 1 offers the 3 nearest eligible agents within 3 km', async () => {
+    it('wave 1 offers the 3 nearest eligible agents within 1 km', async () => {
       assert.deepEqual(await offersOf(h, f, booking.id), ['w1:1:pending', 'w2:1:pending', 'w3:1:pending']);
     });
 
@@ -94,7 +98,7 @@ describe('Push dispatch', () => {
       assert.deepEqual(await offersOf(h, f, booking.id), ['w1:1:declined', 'w2:1:pending', 'w3:1:pending']);
     });
 
-    it('when wave 1 lapses, wave 2 reaches 5 km and the zone agent; ineligible agents are never asked', async () => {
+    it('when wave 1 lapses, wave 2 reaches 2 km and the zone agent; ineligible agents are never asked', async () => {
       await lapseOffers(h, booking.id);
       await dispatch.tick();
       const offers = await offersOf(h, f, booking.id);
@@ -117,12 +121,20 @@ describe('Push dispatch', () => {
       await rejectsWith(agentBookings.accept(w5.userId, booking.id), 409);
     });
 
-    it('a released job goes straight to the next wave, never back to the agent who released it', async () => {
+    it('a released job goes straight to the next wave (3 km), never back to the agent who released it', async () => {
       const w4 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'w4' });
       await agentBookings.reject(w4.userId, booking.id, { reason: 'sick' } as never);
       const offers = await offersOf(h, f, booking.id);
       assert.ok(offers.includes('w4:2:released'), offers.join());
       assert.ok(offers.includes('w6:3:pending'), offers.join());
+    });
+
+    it('wave 4 reaches 4 km, the furthest it ever goes', async () => {
+      await lapseOffers(h, booking.id);
+      await dispatch.tick();
+      const offers = await offersOf(h, f, booking.id);
+      assert.ok(offers.includes('w7:4:pending'), offers.join());
+      assert.ok(!offers.some((offer) => offer.startsWith('w8-far')), offers.join());
     });
 
     it('with nobody left it is exhausted, stays open, and retries in ~10 minutes', async () => {
@@ -137,25 +149,26 @@ describe('Push dispatch', () => {
       assert.equal(after.agentId, null);
     });
 
-    it('the exhausted retry gives agents who let an offer lapse one more chance (wave 4), never a third', async () => {
+    it('the exhausted retry gives agents who let an offer lapse one more chance (within 4 km), never a third', async () => {
       await lapseOffers(h, booking.id);
       await dispatch.tick();
       const offers = await offersOf(h, f, booking.id);
-      assert.ok(offers.some((offer) => /^(w2|w3|w5-zone|w6):4:pending$/.test(offer)), offers.join());
+      assert.ok(offers.some((offer) => /^(w2|w3|w5-zone|w6|w7):5:pending$/.test(offer)), offers.join());
       await lapseOffers(h, booking.id);
       await dispatch.tick();
       await lapseOffers(h, booking.id);
       await dispatch.tick();
       const later = await offersOf(h, f, booking.id);
-      assert.ok(!later.some((offer) => offer.includes(':4:pending')), later.join());
+      assert.ok(!later.some((offer) => offer.includes(':5:pending')), later.join());
+      assert.ok(!later.some((offer) => offer.startsWith('w8-far')), later.join());
     });
   });
 
   describe('jobs closed elsewhere', () => {
     it('an admin assignment withdraws pending offers immediately', async () => {
       const base = area(2);
-      const a = await f.agent('a1', { live: north(base, 1), skills: [skill] });
-      await f.agent('a2', { live: north(base, 1.5), skills: [skill] });
+      const a = await f.agent('a1', { live: north(base, 0.4), skills: [skill] });
+      await f.agent('a2', { live: north(base, 0.7), skills: [skill] });
       const booking = await job(base);
       await dispatch.kick(booking.id);
       await asSuperAdmin(() => admin.assignAgent(adminId, booking.id, { agentId: a.id } as never));
@@ -174,10 +187,10 @@ describe('Push dispatch', () => {
       assert.equal((await dispatchState(h, booking.id))?.status, 'closed');
     });
 
-    it('a job more than an hour past its start is closed without offers', async () => {
+    it('a job past its start is closed without offers', async () => {
       const base = area(4);
       await f.agent('p1', { live: north(base, 1), skills: [skill] });
-      const booking = await job(base, { when: at(-90) });
+      const booking = await job(base, { when: at(-5) });
       await dispatch.kick(booking.id);
       assert.deepEqual(await offersOf(h, f, booking.id), []);
       assert.equal((await dispatchState(h, booking.id))?.status, 'closed');
@@ -201,7 +214,7 @@ describe('Push dispatch', () => {
   describe('who qualifies', () => {
     it('a job starting in 30 minutes only goes to agents with a live fix close enough to make it', async () => {
       const base = area(6);
-      await f.agent('n-close', { live: north(base, 2), skills: [skill] });
+      await f.agent('n-close', { live: north(base, 0.8), skills: [skill] });
       await f.agent('n-zone-far', { live: north(base, 12), skills: [skill], zones: [] });
       await f.agent('n-home-only', { live: north(base, 0.5), staleFix: true, home: north(base, 1), skills: [skill] });
       const booking = await job(base, { when: at(30) });
@@ -235,6 +248,149 @@ describe('Push dispatch', () => {
       const booking = await job(area(9));
       await dispatch.kick(booking.id);
       assert.equal((await dispatchState(h, booking.id))?.status, 'exhausted');
+    });
+  });
+
+  describe('"Right now" jobs', () => {
+    const instantJob = async (base: { lat: number; lng: number }) => {
+      const booking = await job(base, { when: at(15) });
+      await h.repo(E.Booking).update({ id: booking.id }, { bookingMode: 'INSTANT' });
+      await h.repo(E.Payment).save({
+        bookingId: booking.id,
+        customerId: customer.id,
+        amount: '300.00',
+        paymentStatus: 'PAID',
+      } as Partial<E.Payment>);
+      return booking;
+    };
+    /** Pretends dispatch started `minutes` ago and makes it due now. */
+    const searchedFor = (bookingId: string, minutes: number) =>
+      h.ds.query(
+        `UPDATE booking_dispatches SET created_at = now() - make_interval(mins => $2), next_action_at = now() WHERE booking_id = $1`,
+        [bookingId, minutes],
+      );
+
+    it('expires when nobody accepts within 10 minutes, refunds to the wallet, and tells the customer', async () => {
+      const base = area(20);
+      await f.agent('n1', { live: north(base, 1), skills: [skill] });
+      const booking = await instantJob(base);
+      await dispatch.kick(booking.id);
+      assert.deepEqual(await offersOf(h, f, booking.id), ['n1:1:pending']);
+
+      const noticesBefore = await h.repo(E.Notification).count({
+        where: { userId: customerUser.id, notificationType: 'booking_expired' },
+      });
+      await searchedFor(booking.id, 11);
+      await dispatch.tick();
+
+      const after = await reload(h, booking.id);
+      assert.equal(after.status, 'expired');
+      assert.equal(after.agentId, null);
+      assert.equal(after.paymentStatus, 'REFUNDED');
+      const payment = await h.repo(E.Payment).findOneByOrFail({ bookingId: booking.id });
+      assert.equal(payment.paymentStatus, 'REFUNDED');
+      const credit = await h.repo(E.WalletTransaction).findOneByOrFail({ bookingId: booking.id });
+      assert.equal(credit.reason, 'BOOKING_EXPIRED');
+      assert.equal(Number(credit.amount), 300);
+      assert.deepEqual(await offersOf(h, f, booking.id), ['n1:1:cancelled']);
+      assert.equal((await dispatchState(h, booking.id))?.status, 'closed');
+      const noticesAfter = await h.repo(E.Notification).count({
+        where: { userId: customerUser.id, notificationType: 'booking_expired' },
+      });
+      assert.equal(noticesAfter - noticesBefore, 1);
+      const n1 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'n1' });
+      await rejectsWith(agentBookings.accept(n1.userId, booking.id), 409);
+    });
+
+    it('when every wave runs dry, looks again when its 10 minutes are up, not in 10 more', async () => {
+      const booking = await instantJob(area(21));
+      await dispatch.kick(booking.id);
+      await searchedFor(booking.id, 8);
+      await dispatch.tick();
+      const state = await dispatchState(h, booking.id);
+      assert.equal(state?.status, 'exhausted');
+      const minutes = (state!.nextActionAt!.getTime() - Date.now()) / 60_000;
+      assert.ok(minutes > 1 && minutes <= 2, `${minutes}`);
+    });
+
+    it('a job taken back from its agent gets a fresh 10 minutes, and the customer hears it once', async () => {
+      const base = area(23);
+      const a = await f.agent('r-held', { live: north(base, 1), skills: [skill] });
+      const booking = await instantJob(base);
+      await dispatch.kick(booking.id);
+      await agentBookings.accept(a.userId, booking.id);
+      await searchedFor(booking.id, 11);
+
+      assert.equal(await dispatch.release(booking.id, 'the agent account is no longer active'), true);
+      const after = await reload(h, booking.id);
+      assert.equal(after.status, 'paid');
+      assert.equal(after.agentId, null);
+      const notices = await h.repo(E.Notification).find({
+        where: { userId: customerUser.id, notificationType: In(['booking_released', 'booking_expired']) },
+      });
+      assert.ok(notices.some((n) => n.title === 'Finding you a new expert'));
+    });
+
+    it('a cancel racing the expiry settles once: one status, one wallet credit', async () => {
+      const booking = await instantJob(area(24));
+      await dispatch.kick(booking.id);
+      await searchedFor(booking.id, 11);
+      await Promise.allSettled([
+        dispatch.tick(),
+        customerBookings.cancel(customerUser.id, booking.id, {} as never),
+      ]);
+      const after = await reload(h, booking.id);
+      assert.ok(['expired', 'cancelled'].includes(after.status), after.status);
+      assert.equal(after.paymentStatus, 'REFUNDED');
+      assert.equal(await h.repo(E.WalletTransaction).countBy({ bookingId: booking.id }), 1);
+      const history = await h.repo(E.BookingStatusHistory).findBy({ bookingId: booking.id });
+      assert.equal(history.filter((row) => ['expired', 'cancelled'].includes(row.status)).length, 1);
+    });
+
+    it('if the wallet credit fails, nothing about the booking or payment changes', async () => {
+      const booking = await instantJob(area(25));
+      const wallet = h.get(WalletService);
+      const original = wallet.refundBooking;
+      wallet.refundBooking = async () => {
+        throw new Error('wallet down');
+      };
+      try {
+        await assert.rejects(customerBookings.cancel(customerUser.id, booking.id, {} as never));
+      } finally {
+        wallet.refundBooking = original;
+      }
+      const after = await reload(h, booking.id);
+      assert.equal(after.status, 'paid');
+      assert.equal(after.paymentStatus, 'PAID');
+      assert.equal((await h.repo(E.Payment).findOneByOrFail({ bookingId: booking.id })).paymentStatus, 'PAID');
+    });
+
+    it('without a timer, the customer polling their bookings is enough to expire it (once per window)', async () => {
+      const booking = await instantJob(area(26));
+      await dispatch.kick(booking.id);
+      await searchedFor(booking.id, 11);
+      await h.ds.query(`UPDATE dispatch_clock SET next_tick_at = now() WHERE id = 1`);
+      process.env.DISPATCH_REQUEST_TICK_SECONDS = '20';
+      try {
+        const listed = await customerBookings.list(customerUser.id, {} as never);
+        assert.equal(listed.items.find((item) => item.id === booking.id)?.status, 'expired');
+        const [clock] = await h.ds.query(`SELECT next_tick_at FROM dispatch_clock WHERE id = 1`);
+        const seconds = (new Date(clock.next_tick_at).getTime() - Date.now()) / 1000;
+        assert.ok(seconds > 15 && seconds <= 20, `${seconds}`);
+      } finally {
+        process.env.DISPATCH_REQUEST_TICK_SECONDS = '0';
+      }
+    });
+
+    it('a scheduled job keeps searching past 10 minutes', async () => {
+      const base = area(22);
+      await f.agent('s1', { live: north(base, 1), skills: [skill] });
+      const booking = await job(base);
+      await dispatch.kick(booking.id);
+      await searchedFor(booking.id, 30);
+      await lapseOffers(h, booking.id);
+      await dispatch.tick();
+      assert.equal((await reload(h, booking.id)).status, 'paid');
     });
   });
 

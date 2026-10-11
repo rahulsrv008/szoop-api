@@ -30,4 +30,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_booking_offers_booking_agent
   ON booking_offers (booking_id, agent_id);
 CREATE INDEX IF NOT EXISTS idx_booking_offers_agent_id
   ON booking_offers (agent_id);
+
+-- One row: when the next request-driven tick may run (hosts without a timer, e.g. Vercel).
+CREATE TABLE IF NOT EXISTS dispatch_clock (
+  id INT PRIMARY KEY,
+  next_tick_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO dispatch_clock (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+`;
+
+/**
+ * bookings.booking_mode (sql/booking_mode_expiry.sql). Checked first because
+ * ALTER TABLE takes an exclusive lock on bookings even when the column exists,
+ * and this runs on every boot.
+ */
+export const BOOKING_MODE_SQL = `
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'bookings'
+      AND column_name = 'booking_mode'
+  ) THEN
+    ALTER TABLE bookings ADD COLUMN booking_mode VARCHAR(20) NOT NULL DEFAULT 'SCHEDULED';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'bookings'
+      AND column_name = 'payment_mode'
+  ) THEN
+    ALTER TABLE bookings ADD COLUMN payment_mode VARCHAR(20) NOT NULL DEFAULT 'PREPAID';
+  END IF;
+END $$;
 `;

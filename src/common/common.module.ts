@@ -19,6 +19,7 @@ import {
   SystemSetting,
   UpcomingCity,
   User,
+  WalletTransaction,
 } from 'src/database/entities';
 import { IdentityService } from './auth/identity.service';
 import { TokenService } from './auth/token.service';
@@ -30,6 +31,8 @@ import { SettingsService } from './services/settings.service';
 import { ZoneResolverService } from './services/zone-resolver.service';
 import { ServiceabilityService } from './services/serviceability.service';
 import { AdminAccessService } from './auth/admin-access';
+import { WalletService } from './services/wallet.service';
+import { BookingClosureService } from './booking/booking-closure.service';
 
 /**
  * Cross-app building blocks (identity, tokens, OTP, audit, notifications).
@@ -58,6 +61,7 @@ import { AdminAccessService } from './auth/admin-access';
       ServiceZoneArea,
       UpcomingCity,
       CityWaitlist,
+      WalletTransaction,
     ]),
   ],
   providers: [
@@ -71,6 +75,8 @@ import { AdminAccessService } from './auth/admin-access';
     ZoneResolverService,
     ServiceabilityService,
     AdminAccessService,
+    WalletService,
+    BookingClosureService,
   ],
   exports: [
     IdentityService,
@@ -83,6 +89,8 @@ import { AdminAccessService } from './auth/admin-access';
     ZoneResolverService,
     ServiceabilityService,
     AdminAccessService,
+    WalletService,
+    BookingClosureService,
   ],
 })
 export class CommonModule {}

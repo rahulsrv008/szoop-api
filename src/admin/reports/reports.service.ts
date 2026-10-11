@@ -65,9 +65,10 @@ export class AdminReportsService {
         total: acc.total + row.total,
         completed: acc.completed + row.completed,
         cancelled: acc.cancelled + row.cancelled,
+        expired: acc.expired + row.expired,
         revenue: acc.revenue + row.revenue,
       }),
-      { total: 0, completed: 0, cancelled: 0, revenue: 0 },
+      { total: 0, completed: 0, cancelled: 0, expired: 0, revenue: 0 },
     );
 
     return {
@@ -76,6 +77,7 @@ export class AdminReportsService {
         total: bookingTotals.total,
         completed: bookingTotals.completed,
         cancelled: bookingTotals.cancelled,
+        expired: bookingTotals.expired,
         completedRevenue: Number(bookingTotals.revenue.toFixed(2)),
         days: bookings.length,
       },
@@ -117,9 +119,10 @@ export class AdminReportsService {
           total: acc.total + row.total,
           completed: acc.completed + row.completed,
           cancelled: acc.cancelled + row.cancelled,
+          expired: acc.expired + row.expired,
           revenue: Number((acc.revenue + row.revenue).toFixed(2)),
         }),
-        { total: 0, completed: 0, cancelled: 0, revenue: 0 },
+        { total: 0, completed: 0, cancelled: 0, expired: 0, revenue: 0 },
       ),
     };
   }
@@ -156,6 +159,10 @@ export class AdminReportsService {
         'cancelled',
       )
       .addSelect(
+        `SUM(CASE WHEN booking.status = 'expired' THEN 1 ELSE 0 END)::int`,
+        'expired',
+      )
+      .addSelect(
         `COALESCE(SUM(CASE WHEN booking.status = 'completed' THEN booking.totalAmount ELSE 0 END), 0)`,
         'revenue',
       )
@@ -163,6 +170,9 @@ export class AdminReportsService {
         from: range.from,
         to: range.to,
       })
+      // Only confirmed bookings: unpaid requests (open or voided) never became one.
+      .andWhere("booking.status <> 'finding'")
+      .andWhere("booking.paymentStatus <> 'VOIDED'")
       .groupBy('booking.bookingDate')
       .orderBy('booking.bookingDate', 'ASC');
     this.access.restrictZoneColumn(bookingQb, 'booking.service_area_id');
@@ -171,6 +181,7 @@ export class AdminReportsService {
         total: number;
         completed: number;
         cancelled: number;
+        expired: number;
         revenue: string;
       }>();
 
@@ -179,6 +190,7 @@ export class AdminReportsService {
       total: Number(row.total),
       completed: Number(row.completed),
       cancelled: Number(row.cancelled),
+      expired: Number(row.expired),
       revenue: Number(row.revenue),
     }));
   }

@@ -108,6 +108,17 @@ export class CustomerBookingsController {
   }
 
   @RateLimit(RATE_LIMITS.BOOKING_CHANGE)
+  @Post(':id/pay-after-service')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Online payment failed: confirm the booking and pay by the end of the job' })
+  payAfterService(
+    @CurrentUser('sub') userId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.bookingsService.payAfterService(userId, id);
+  }
+
+  @RateLimit(RATE_LIMITS.BOOKING_CHANGE)
   @Post(':id/reschedule')
   @HttpCode(200)
   @ApiOperation({ summary: 'Move a booking to another date and time' })

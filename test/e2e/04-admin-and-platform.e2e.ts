@@ -7,6 +7,8 @@ import { AdminBookingsService } from 'src/admin/bookings/bookings.service';
 import { CustomerBookingsService } from 'src/customer/bookings/bookings.service';
 import { CustomerPaymentsService } from 'src/customer/payments/payments.service';
 import { TokenService } from 'src/common/auth/token.service';
+import { WalletService } from 'src/common/services/wallet.service';
+import { AdminCustomersService } from 'src/admin/customers/customers.service';
 
 describe('Admin actions and platform', () => {
   let h: Harness;
@@ -107,8 +109,9 @@ describe('Admin actions and platform', () => {
     });
   });
 
-  describe('cancelling a paid booking', () => {
-    it('marks the payment refunded', async () => {
+  describe('cancelling refunds into the customer wallet', () => {
+    const wallet = () => h.get(WalletService);
+    const book = async (pay: boolean) => {
       const address = await f.address(customer.id, area(2));
       const created = await customerBookings.create(customerUser.id, {
         addressId: address.id,
@@ -116,14 +119,65 @@ describe('Admin actions and platform', () => {
         startTime: '10:00',
         items: [{ serviceId: cleaning.id }],
       } as never);
-      const order = await payments.createOrder(customerUser.id, { bookingId: created.id } as never);
-      await payments.verify(customerUser.id, { bookingId: created.id, razorpayOrderId: order.orderId, razorpayPaymentId: 'p' } as never);
-      const result = (await customerBookings.cancel(customerUser.id, created.id, {} as never)) as { paymentStatus: string };
+      if (pay) {
+        const order = await payments.createOrder(customerUser.id, { bookingId: created.id } as never);
+        await payments.verify(customerUser.id, { bookingId: created.id, razorpayOrderId: order.orderId, razorpayPaymentId: 'p' } as never);
+      }
+      return reload(h, created.id);
+    };
+
+    it('a customer cancel marks the payment refunded and credits what was paid', async () => {
+      const booking = await book(true);
+      const before = await wallet().balance(customer.id);
+      const result = (await customerBookings.cancel(customerUser.id, booking.id, {} as never)) as {
+        paymentStatus: string;
+        refundedToWallet: number;
+      };
       assert.equal(result.paymentStatus, 'REFUNDED');
+      assert.equal(result.refundedToWallet, Number(booking.totalAmount));
+      assert.equal(await wallet().balance(customer.id), before + Number(booking.totalAmount));
+
+      const statement = await wallet().statement(customer.id, { page: 1, limit: 5 });
+      assert.equal(statement.items[0].bookingNumber, booking.bookingNumber);
+      assert.equal(statement.items[0].reason, 'BOOKING_CANCELLED');
+      const listed = (await customerBookings.list(customerUser.id, { status: 'cancelled' } as never)).items;
+      assert.equal(listed.find((item) => item.id === booking.id)?.refundedToWallet, Number(booking.totalAmount));
     });
 
-    it('actually issues the refund at Razorpay', { todo: 'cancel only sets REFUNDED; no gateway refund call yet' }, () => {
-      assert.fail('no refund API call to assert on');
+    it('an unpaid booking is voided and nothing is credited', async () => {
+      const booking = await book(false);
+      const before = await wallet().balance(customer.id);
+      const result = (await customerBookings.cancel(customerUser.id, booking.id, {} as never)) as {
+        paymentStatus: string;
+        refundedToWallet: number;
+      };
+      assert.equal(result.paymentStatus, 'VOIDED');
+      assert.equal(result.refundedToWallet, 0);
+      assert.equal(await wallet().balance(customer.id), before);
+    });
+
+    it('an admin cancel credits the wallet too, and the admin customer page shows it', async () => {
+      const booking = await job();
+      await h.repo(E.Payment).save({
+        bookingId: booking.id,
+        customerId: customer.id,
+        amount: '300.00',
+        paymentStatus: 'PAID',
+      } as Partial<E.Payment>);
+      const before = await wallet().balance(customer.id);
+      await asSuperAdmin(() => admin.cancel(adminId, booking.id, { reason: 'ops' } as never));
+      assert.equal(await wallet().balance(customer.id), before + 300);
+
+      const detail = await asSuperAdmin(() => h.get(AdminCustomersService).detail(customer.id));
+      assert.equal(detail.wallet.balance, before + 300);
+      assert.equal(detail.wallet.recentTransactions[0].bookingNumber, booking.bookingNumber);
+    });
+
+    it('a booking is credited at most once', async () => {
+      const booking = await job();
+      const paid = { amount: '300.00', paymentStatus: 'PAID' as const };
+      assert.equal(await wallet().refundBooking(booking, paid, 'BOOKING_CANCELLED'), 300);
+      assert.equal(await wallet().refundBooking(booking, paid, 'BOOKING_EXPIRED'), 0);
     });
   });
 

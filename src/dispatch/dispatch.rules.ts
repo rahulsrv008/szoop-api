@@ -19,8 +19,8 @@ export const COMMITTED_STATUSES: Booking['status'][] = ['paid', 'accepted', 'arr
 /** Statuses an agent can be pulled off (released or no-show) before work starts. */
 export const RELEASABLE_STATUSES: Booking['status'][] = ['accepted', 'arriving'];
 
-/** A job can still be dispatched/accepted this long after its start: late beats nobody. */
-export const LATE_JOB_WINDOW_MINUTES = 60;
+/** An open job expires at its start: after that it's no longer listed, dispatched or accepted. */
+export const LATE_JOB_WINDOW_MINUTES = 0;
 
 /**
  * A multi-visit plan only has to fit an agent's schedule for its first this
@@ -46,13 +46,15 @@ const CITY_SPEED_KMH = 20;
 const ARRIVAL_TOLERANCE_MINUTES = 10;
 
 /**
- * Push dispatch widens the search each time a wave goes unanswered:
- * a few nearby agents first, then further out, before giving up.
+ * Push dispatch widens the search by 1 km each time a wave goes unanswered,
+ * 1 km up to 4 km at most: a few nearby agents first, then further out. The
+ * last wave asks more of them, and the 10-minute retry reuses it.
  */
 export const DISPATCH_WAVES = [
+  { radiusKm: 1, size: 3 },
+  { radiusKm: 2, size: 3 },
   { radiusKm: 3, size: 3 },
-  { radiusKm: 5, size: 3 },
-  { radiusKm: 8, size: 5 },
+  { radiusKm: 4, size: 5 },
 ] as const;
 
 /** How long an agent has to answer an offer before the next wave goes out. */
@@ -60,6 +62,9 @@ export const OFFER_TTL_SECONDS = 90;
 
 /** Once every wave ran dry, how often to look again for agents who came online since. */
 export const EXHAUSTED_RETRY_MINUTES = 10;
+
+/** A "Right now" job nobody accepts within this long of dispatch starting expires, and the customer is told. */
+export const INSTANT_SEARCH_MINUTES = 10;
 
 export type GeoPoint = { lat: number; lng: number };
 

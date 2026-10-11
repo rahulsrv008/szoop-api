@@ -50,9 +50,17 @@ export class NotificationDispatchService {
       where: { userId: In(unique), isActive: true },
       select: ['token'],
     });
+    // A job offer rings with the agent app's ringtone on its own channel, so it
+    // is heard with the app closed; the type lets the app tell offers apart.
+    const ringing = input.type === 'job_offer';
     await this.push.sendToTokens(
       devices.map((device) => device.token),
-      { title: input.title, body: input.message, data: input.data },
+      {
+        title: input.title,
+        body: input.message,
+        data: { ...(input.data ?? {}), ...(input.type ? { type: input.type } : {}) },
+        ...(ringing ? { channelId: 'job-offers', sound: 'job-ring.wav' } : {}),
+      },
     );
 
     return notifications;

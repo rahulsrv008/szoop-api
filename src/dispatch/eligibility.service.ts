@@ -112,8 +112,7 @@ export class EligibilityService {
    * When each booking is next due (server-local): its earliest not-done visit
    * for plans, else its own start. Slots more than `lateWindowMinutes` in the
    * past don't count, so a booking missing from the map is no longer worth
-   * pushing to anyone. Pass null to keep past slots (the open pool shows a job
-   * until someone takes it).
+   * pushing to anyone. Pass null to keep past slots.
    */
   async nextStarts(
     bookings: Booking[],

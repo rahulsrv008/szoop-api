@@ -9,6 +9,10 @@ export interface PushPayload {
   title: string;
   body: string;
   data?: Record<string, string>;
+  /** Android channel the app created; defaults to 'jobs'. */
+  channelId?: string;
+  /** A sound file bundled in the app (e.g. 'job-ring.wav'); defaults to the phone's sound. */
+  sound?: string;
 }
 
 /**
@@ -40,9 +44,9 @@ export class PushService {
       to,
       title: payload.title,
       body: payload.body,
-      sound: 'default',
+      sound: payload.sound ?? 'default',
       priority: 'high',
-      channelId: 'jobs',
+      channelId: payload.channelId ?? 'jobs',
       data: payload.data ?? {},
     }));
     try {
@@ -88,7 +92,12 @@ export class PushService {
       body: JSON.stringify({
         registration_ids: tokens,
         priority: 'high',
-        notification: { title: payload.title, body: payload.body, sound: 'default' },
+        notification: {
+          title: payload.title,
+          body: payload.body,
+          sound: payload.sound ?? 'default',
+          android_channel_id: payload.channelId ?? 'jobs',
+        },
         data: payload.data ?? {},
       }),
       signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
