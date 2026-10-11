@@ -46,10 +46,6 @@ interface AgentListRow {
   currentLocation: Agent['currentLocation'];
 }
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 @Injectable()
 export class AdminAgentsService {
   constructor(
@@ -173,7 +169,7 @@ export class AdminAgentsService {
         order: { createdAt: 'DESC' },
       }),
       this.availabilityRepo.find({
-        where: { agentId: id, availabilityDate: today() },
+        where: { agentId: id, availabilityDate: todayString() },
         order: { startTime: 'ASC' },
       }),
       this.ratingRepo
@@ -303,7 +299,7 @@ export class AdminAgentsService {
 
     agent.approvalStatus = 'APPROVED';
     agent.status = 'ACTIVE';
-    if (!agent.joiningDate) agent.joiningDate = today();
+    if (!agent.joiningDate) agent.joiningDate = todayString();
     await this.agentRepo.save(agent);
 
     await this.notifications.toUser(agent.userId, {
