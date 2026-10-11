@@ -24,10 +24,17 @@ export class CustomerTrackingService {
     });
     if (!booking) throw new NotFoundException('Booking not found');
 
-    const lastPing = await this.locationRepo.findOne({
+    let lastPing = await this.locationRepo.findOne({
       where: { bookingId: booking.id },
       order: { recordedAt: 'DESC' },
     });
+
+    if (!lastPing && booking.agentId) {
+      lastPing = await this.locationRepo.findOne({
+        where: { agentId: booking.agentId },
+        order: { recordedAt: 'DESC' },
+      });
+    }
 
     const ping = lastPing
       ? {
