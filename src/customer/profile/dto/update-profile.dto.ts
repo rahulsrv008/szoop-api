@@ -5,9 +5,11 @@ import {
   IsIn,
   IsOptional,
   IsString,
-  IsUrl,
+  Matches,
   MaxLength,
 } from 'class-validator';
+
+import { MEDIA_REF_MESSAGE, MEDIA_REF_REGEX } from 'src/common/utils/validation';
 
 export class UpdateCustomerProfileDto {
   @ApiPropertyOptional({ example: 'Rahul' })
@@ -38,8 +40,11 @@ export class UpdateCustomerProfileDto {
   @IsDateString()
   dateOfBirth?: string;
 
-  @ApiPropertyOptional({ description: 'Public URL of an uploaded image' })
+  @ApiPropertyOptional({
+    description: 'Photo from camera/gallery (data URL) or hosted image URL',
+  })
   @IsOptional()
-  @IsUrl()
+  @IsString()
+  @Matches(MEDIA_REF_REGEX, { message: MEDIA_REF_MESSAGE })
   profileImage?: string;
 }
