@@ -11,7 +11,7 @@ export interface PushPayload {
   data?: Record<string, string>;
   /** Android channel the app created; defaults to 'jobs'. */
   channelId?: string;
-  /** A sound file bundled in the app (e.g. 'job-ring.wav'); defaults to the phone's sound. */
+  /** A sound file bundled in the app (e.g. 'job_ring.wav'); defaults to the phone's sound. */
   sound?: string;
 }
 
