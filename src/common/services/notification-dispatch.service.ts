@@ -59,7 +59,7 @@ export class NotificationDispatchService {
         title: input.title,
         body: input.message,
         data: { ...(input.data ?? {}), ...(input.type ? { type: input.type } : {}) },
-        ...(ringing ? { channelId: 'job-offers', sound: 'job-ring.wav' } : {}),
+        ...(ringing ? { channelId: 'job-offers', sound: 'job_ring.wav' } : {}),
       },
     );
 
