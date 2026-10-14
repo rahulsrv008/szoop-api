@@ -64,9 +64,8 @@ const RETRY_WAVE = DISPATCH_WAVES.length + 1;
 type Candidate = { agent: Agent; distanceKm: number | null; live: boolean };
 
 /**
- * Push dispatch: when a job opens, offer it to the nearest eligible agents
- * in waves of widening radius. Each offer lives OFFER_TTL_SECONDS; when a
- * wave is declined or times out, the next wave goes out. First accept wins
+ * Push dispatch: when a job opens, broadcast it to every eligible agent at
+ * once (DISPATCH_WAVES). Each offer lives OFFER_TTL_SECONDS. First accept wins
  * (the conditional claim in AgentBookingsService.accept). If every wave runs
  * dry the job stays in the open pool and is re-checked every few minutes.
  * A "Right now" job still open INSTANT_SEARCH_MINUTES after dispatch started
@@ -250,6 +249,11 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     const now = new Date();
     await this.excludeAgent(bookingId, agentId, outcome);
 
+    // A job handed back by its agent goes straight back out to everyone else.
+    if (outcome === 'released') {
+      await this.rebroadcast(bookingId);
+      return;
+    }
     const deciding = await this.offerRepo.count({
       where: { bookingId, status: 'pending', expiresAt: MoreThan(now) },
     });
@@ -262,6 +266,14 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
    * explicitly declined stay excluded; everyone else can be asked again.
    */
   async onRescheduled(bookingId: string) {
+    await this.rebroadcast(bookingId);
+  }
+
+  /**
+   * A fresh broadcast: earlier offers are cleared so everyone can be asked
+   * again, except agents who declined or handed the job back (those stay out).
+   */
+  private async rebroadcast(bookingId: string) {
     await this.offerRepo.delete({
       bookingId,
       status: In(['pending', 'expired', 'cancelled']),
@@ -302,7 +314,8 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
       .set({ createdAt: () => 'now()' })
       .where('booking_id = :bookingId', { bookingId })
       .execute();
-    await this.kick(bookingId);
+    // Broadcast it again now to everyone it was offered to (bar this agent and decliners).
+    await this.rebroadcast(bookingId);
     // Too late to find anyone (it expired straight away): the expiry notice already told the customer.
     const stillOpen =
       (await this.bookingRepo.findOne({ where: { id: bookingId } }))?.status === 'paid';
@@ -586,7 +599,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     );
     if (state.status !== 'exhausted') {
       this.logger.warn(
-        `No agent took booking ${booking.bookingNumber} after ${DISPATCH_WAVES.length} waves; it stays in the open pool`,
+        `No agent took booking ${booking.bookingNumber} from the broadcast; it stays in the open pool`,
       );
     }
   }

@@ -46,15 +46,12 @@ const CITY_SPEED_KMH = 20;
 const ARRIVAL_TOLERANCE_MINUTES = 10;
 
 /**
- * Push dispatch widens the search by 1 km each time a wave goes unanswered,
- * 1 km up to 4 km at most: a few nearby agents first, then further out. The
- * last wave asks more of them, and the 10-minute retry reuses it.
+ * Push dispatch broadcasts a job to every eligible agent at once: within 4 km
+ * (or anywhere in the job's zone), all pushed in one go; the first to accept
+ * wins. One "wave" of unlimited size; the 10-minute retry reuses it.
  */
 export const DISPATCH_WAVES = [
-  { radiusKm: 1, size: 3 },
-  { radiusKm: 2, size: 3 },
-  { radiusKm: 3, size: 3 },
-  { radiusKm: 4, size: 5 },
+  { radiusKm: 4, size: Number.POSITIVE_INFINITY },
 ] as const;
 
 /** How long an agent has to answer an offer before the next wave goes out. */
