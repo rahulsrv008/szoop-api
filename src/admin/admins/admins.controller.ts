@@ -66,5 +66,6 @@ export class AdminAdminsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.adminsService.deactivate(adminId, id);
+    //added comment to test the commit
   }
 }
