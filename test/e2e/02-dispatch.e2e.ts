@@ -56,20 +56,20 @@ describe('Push dispatch', () => {
   const job = (base: { lat: number; lng: number }, extra: Partial<Parameters<Factory['booking']>[0]> = {}) =>
     f.booking({ customerId: customer.id, service: cleaning, point: base, when: tomorrow(), ...extra });
 
-  describe('waves', () => {
+  describe('broadcast', () => {
     const base = area(1);
     let booking: E.Booking;
+    const eligible = ['b1', 'b2', 'b3', 'b4', 'b5', 'b-zone'];
 
     before(async () => {
       const zone = await f.zone();
-      await f.agent('w1', { live: north(base, 0.3), skills: [skill] });
-      await f.agent('w2', { live: north(base, 0.6), skills: [skill] });
-      await f.agent('w3', { live: north(base, 0.9), skills: [skill] });
-      await f.agent('w4', { live: north(base, 1.5), skills: [skill] });
-      await f.agent('w5-zone', { skills: [skill], zones: [zone.id] });
-      await f.agent('w6', { live: north(base, 2.5), skills: [skill] });
-      await f.agent('w7', { live: north(base, 3.5), skills: [skill] });
-      await f.agent('w8-far', { live: north(base, 6), skills: [skill] });
+      await f.agent('b1', { live: north(base, 0.3), skills: [skill] });
+      await f.agent('b2', { live: north(base, 0.9), skills: [skill] });
+      await f.agent('b3', { live: north(base, 1.5), skills: [skill] });
+      await f.agent('b4', { live: north(base, 2.5), skills: [skill] });
+      await f.agent('b5', { live: north(base, 3.5), skills: [skill] });
+      await f.agent('b-zone', { skills: [skill], zones: [zone.id] });
+      await f.agent('b-far', { live: north(base, 6), skills: [skill] });
       await f.agent('x-unskilled', { live: north(base, 0.5) });
       await f.agent('x-stale', { live: north(base, 0.3), staleFix: true, skills: [skill] });
       await f.agent('x-suspended', { live: north(base, 0.2), skills: [skill], status: 'SUSPENDED' });
@@ -82,85 +82,79 @@ describe('Push dispatch', () => {
       await dispatch.kick(booking.id);
     });
 
-    it('wave 1 offers the 3 nearest eligible agents within 1 km', async () => {
-      assert.deepEqual(await offersOf(h, f, booking.id), ['w1:1:pending', 'w2:1:pending', 'w3:1:pending']);
+    it('offers the job to every eligible agent within 4 km, and in its zone, at once', async () => {
+      const offers = await offersOf(h, f, booking.id);
+      assert.deepEqual([...offers].sort(), eligible.map((name) => `${name}:1:pending`).sort());
+      assert.ok(!offers.some((offer) => offer.startsWith('x-') || offer.startsWith('b-far')), offers.join());
     });
 
     it('pushes a job_offer notification to each of them', async () => {
       const count = await h.repo(E.Notification).count({ where: { notificationType: 'job_offer' } });
-      assert.equal(count, 3);
+      assert.equal(count, eligible.length);
     });
 
-    it('a decline while others are still deciding does not start the next wave', async () => {
-      const w1 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'w1' });
-      await agentBookings.reject(w1.userId, booking.id, {} as never);
-      // The offer keeps the wave it was made in; only its status changes.
-      assert.deepEqual(await offersOf(h, f, booking.id), ['w1:1:declined', 'w2:1:pending', 'w3:1:pending']);
-    });
-
-    it('when wave 1 lapses, wave 2 reaches 2 km and the zone agent; ineligible agents are never asked', async () => {
-      await lapseOffers(h, booking.id);
-      await dispatch.tick();
+    it('a decline changes nothing for the others', async () => {
+      const b1 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'b1' });
+      await agentBookings.reject(b1.userId, booking.id, {} as never);
       const offers = await offersOf(h, f, booking.id);
-      assert.ok(offers.includes('w2:1:expired') && offers.includes('w3:1:expired'));
-      assert.ok(offers.includes('w4:2:pending') && offers.includes('w5-zone:2:pending'));
-      assert.ok(!offers.some((offer) => offer.startsWith('x-')), offers.join());
+      assert.ok(offers.includes('b1:1:declined'));
+      assert.equal(offers.filter((offer) => offer.endsWith(':1:pending')).length, eligible.length - 1);
     });
 
     it('the first accept wins: offer accepted, the rest withdrawn, dispatch assigned', async () => {
-      const w4 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'w4' });
-      await agentBookings.accept(w4.userId, booking.id);
+      const b3 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'b3' });
+      await agentBookings.accept(b3.userId, booking.id);
       const offers = await offersOf(h, f, booking.id);
-      assert.ok(offers.includes('w4:2:accepted') && offers.includes('w5-zone:2:cancelled'));
+      assert.ok(offers.includes('b3:1:accepted') && offers.includes('b2:1:cancelled'), offers.join());
+      assert.ok(!offers.some((offer) => offer.endsWith(':pending')), offers.join());
       assert.equal((await dispatchState(h, booking.id))?.status, 'assigned');
       assert.equal((await reload(h, booking.id)).status, 'accepted');
     });
 
     it('a second accept gets 409', async () => {
-      const w5 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'w5-zone' });
-      await rejectsWith(agentBookings.accept(w5.userId, booking.id), 409);
+      const b2 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'b2' });
+      await rejectsWith(agentBookings.accept(b2.userId, booking.id), 409);
     });
 
-    it('a released job goes straight to the next wave (3 km), never back to the agent who released it', async () => {
-      const w4 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'w4' });
-      await agentBookings.reject(w4.userId, booking.id, { reason: 'sick' } as never);
+    it('a released job is broadcast again at once, to all but the agent who released it and decliners', async () => {
+      const b3 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'b3' });
+      await agentBookings.reject(b3.userId, booking.id, { reason: 'sick' } as never);
       const offers = await offersOf(h, f, booking.id);
-      assert.ok(offers.includes('w4:2:released'), offers.join());
-      assert.ok(offers.includes('w6:3:pending'), offers.join());
+      assert.ok(offers.includes('b3:1:released') && offers.includes('b1:1:declined'), offers.join());
+      for (const name of ['b2', 'b4', 'b5', 'b-zone']) {
+        assert.ok(offers.includes(`${name}:1:pending`), `${name} re-asked: ${offers.join()}`);
+      }
+      assert.ok(!offers.some((offer) => offer.startsWith('b-far')), offers.join());
     });
+  });
 
-    it('wave 4 reaches 4 km, the furthest it ever goes', async () => {
-      await lapseOffers(h, booking.id);
-      await dispatch.tick();
-      const offers = await offersOf(h, f, booking.id);
-      assert.ok(offers.includes('w7:4:pending'), offers.join());
-      assert.ok(!offers.some((offer) => offer.startsWith('w8-far')), offers.join());
-    });
+  describe('when nobody accepts', () => {
+    it('it stays open, is broadcast once more after ~10 minutes, and never a third time', async () => {
+      const base = area(27);
+      await f.agent('l1', { live: north(base, 0.5), skills: [skill] });
+      await f.agent('l2', { live: north(base, 1.5), skills: [skill] });
+      const booking = await job(base);
+      await dispatch.kick(booking.id);
+      assert.deepEqual([...(await offersOf(h, f, booking.id))].sort(), ['l1:1:pending', 'l2:1:pending']);
 
-    it('with nobody left it is exhausted, stays open, and retries in ~10 minutes', async () => {
       await lapseOffers(h, booking.id);
       await dispatch.tick();
       const state = await dispatchState(h, booking.id);
       assert.equal(state?.status, 'exhausted');
       const minutes = (state!.nextActionAt!.getTime() - Date.now()) / 60_000;
       assert.ok(minutes > 9 && minutes <= 10, `${minutes}`);
-      const after = await reload(h, booking.id);
-      assert.equal(after.status, 'paid');
-      assert.equal(after.agentId, null);
-    });
+      assert.equal((await reload(h, booking.id)).status, 'paid');
 
-    it('the exhausted retry gives agents who let an offer lapse one more chance (within 4 km), never a third', async () => {
       await lapseOffers(h, booking.id);
       await dispatch.tick();
-      const offers = await offersOf(h, f, booking.id);
-      assert.ok(offers.some((offer) => /^(w2|w3|w5-zone|w6|w7):5:pending$/.test(offer)), offers.join());
+      assert.deepEqual([...(await offersOf(h, f, booking.id))].sort(), ['l1:2:pending', 'l2:2:pending']);
+
       await lapseOffers(h, booking.id);
       await dispatch.tick();
       await lapseOffers(h, booking.id);
       await dispatch.tick();
       const later = await offersOf(h, f, booking.id);
-      assert.ok(!later.some((offer) => offer.includes(':5:pending')), later.join());
-      assert.ok(!later.some((offer) => offer.startsWith('w8-far')), later.join());
+      assert.ok(!later.some((offer) => offer.endsWith(':pending')), later.join());
     });
   });
 
@@ -395,7 +389,7 @@ describe('Push dispatch', () => {
   });
 
   describe('concurrency', () => {
-    it('a kick racing a tick (and another kick) sends one wave and one set of pushes', async () => {
+    it('a kick racing a tick (and another kick) sends one broadcast and one set of pushes', async () => {
       const base = area(10);
       for (const name of ['k1', 'k2', 'k3', 'k4']) {
         await f.agent(name, { live: north(base, 1), skills: [skill] });
@@ -404,9 +398,9 @@ describe('Push dispatch', () => {
       const booking = await job(base);
       await Promise.all([dispatch.kick(booking.id), dispatch.kick(booking.id), dispatch.tick()]);
       const offers = await offersOf(h, f, booking.id);
-      assert.equal(offers.length, 3, offers.join());
+      assert.equal(offers.length, 4, offers.join());
       const pushes = (await h.repo(E.Notification).count({ where: { notificationType: 'job_offer' } })) - before;
-      assert.equal(pushes, 3);
+      assert.equal(pushes, 4);
     });
   });
 });
