@@ -69,6 +69,7 @@ const DETAIL_RELATIONS = [
   'items.service',
   'address',
   'payment',
+  'payment.transactions',
   'agent',
   'agent.user',
   'ratings',
@@ -547,7 +548,14 @@ export class CustomerBookingsService {
         paymentStatus: Not('VOIDED'),
         ...dateRangeWhere(query.from, query.to),
       },
-      relations: ['items', 'items.service', 'agent', 'address'],
+      relations: [
+        'items',
+        'items.service',
+        'agent',
+        'address',
+        'payment',
+        'payment.transactions',
+      ],
       order: { bookingDate: 'DESC', startTime: 'DESC', createdAt: 'DESC' },
       ...skipTake(query),
     });
@@ -567,6 +575,7 @@ export class CustomerBookingsService {
       bookingNumber: booking.bookingNumber,
       status: booking.status,
       paymentStatus: booking.paymentStatus,
+      transactionId: paymentTransactionId(booking.payment),
       bookingDate: booking.bookingDate,
       startTime: booking.startTime,
       totalAmount: Number(booking.totalAmount),
@@ -662,6 +671,7 @@ export class CustomerBookingsService {
             paymentStatus: booking.payment.paymentStatus,
             paymentMethod: booking.payment.paymentMethod,
             paidAt: booking.payment.paidAt,
+            transactionId: paymentTransactionId(booking.payment),
           }
         : null,
       agent: booking.agent
@@ -1186,6 +1196,18 @@ function round2(value: number) {
 
 function toNumberOrNull(value: string | null) {
   return value === null ? null : Number(value);
+}
+
+function paymentTransactionId(payment: Payment | null | undefined) {
+  return payment?.transactions
+    ?.filter(
+      (transaction) =>
+        transaction.gatewayName === 'razorpay' &&
+        transaction.status === 'captured' &&
+        transaction.gatewayTransactionId,
+    )
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
+    ?.gatewayTransactionId ?? null;
 }
 
 /** Customers book in India time; the server clock may be UTC. */

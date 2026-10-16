@@ -16,6 +16,7 @@ import { RazorpayService } from 'src/integrations/payments/razorpay.service';
 import { DispatchService } from 'src/dispatch/dispatch.service';
 import { CreateCustomerPaymentDto } from './dto/create-payment.dto';
 import { VerifyCustomerPaymentDto } from './dto/verify-payment.dto';
+import { isDeployedEnv } from 'src/config/env';
 
 const GATEWAY = 'razorpay';
 
@@ -83,7 +84,10 @@ export class CustomerPaymentsService {
       payment.paymentMethod = dto.paymentMethod;
       await this.paymentRepo.save(payment);
     }
-    const order = this.razorpay.createOrder(amountPaise, booking.bookingNumber);
+    const order = await this.razorpay.createOrder(
+      amountPaise,
+      booking.bookingNumber,
+    );
 
     await this.transactionRepo.save(
       this.transactionRepo.create({
@@ -120,11 +124,28 @@ export class CustomerPaymentsService {
       dto.razorpayPaymentId,
       dto.razorpaySignature,
     );
-    if (!check.verified && !check.skipped) {
+    const payment = await this.ensurePayment(booking, customerId);
+    const transaction = await this.transactionRepo.findOne({
+      where: {
+        paymentId: payment.id,
+        gatewayName: GATEWAY,
+        gatewayTransactionId: dto.razorpayOrderId,
+        status: 'created',
+      },
+    });
+    if (!transaction) {
+      throw new BadRequestException(
+        'Payment order does not belong to this booking',
+      );
+    }
+
+    const mode = transaction.gatewayResponse?.mode;
+    const validStub = mode === 'stub' && check.skipped && !isDeployedEnv();
+    const validRazorpay = mode === 'razorpay' && check.verified;
+    if (!validStub && !validRazorpay) {
       throw new BadRequestException('Payment signature verification failed');
     }
 
-    const payment = await this.ensurePayment(booking, customerId);
     const captured = await this.capture(booking.id, payment.id, dto.razorpayPaymentId, {
       razorpayOrderId: dto.razorpayOrderId,
       razorpayPaymentId: dto.razorpayPaymentId,
@@ -139,6 +160,7 @@ export class CustomerPaymentsService {
       paymentStatus: captured.booking.paymentStatus,
       totalAmount: Number(booking.totalAmount),
       paymentId: payment.id,
+      transactionId: dto.razorpayPaymentId,
       paidAt: captured.payment.paidAt,
       refundedToWallet: captured.refundedToWallet,
     };
@@ -154,7 +176,7 @@ export class CustomerPaymentsService {
     body: Record<string, unknown>,
   ) {
     const check = this.razorpay.verifyWebhookSignature(rawBody, signature);
-    if (!check.verified && !check.skipped) {
+    if (!check.verified && (!check.skipped || isDeployedEnv())) {
       throw new UnauthorizedException('Invalid webhook signature');
     }
 
@@ -362,4 +384,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function paymentTransactionId(payment?: Payment | null) {
+  return payment?.transactions
+    ?.filter(
+      (transaction) =>
+        transaction.gatewayName === GATEWAY &&
+        transaction.status === 'captured' &&
+        transaction.gatewayTransactionId,
+    )
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
+    ?.gatewayTransactionId ?? null;
 }

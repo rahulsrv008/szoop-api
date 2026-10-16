@@ -169,15 +169,37 @@ describe('Booking creation and payment', () => {
       const order = await payments.createOrder(user.id, { bookingId } as never);
       assert.equal(order.mode, 'stub');
 
-      await payments.verify(user.id, {
+      const verified = await payments.verify(user.id, {
         bookingId,
         razorpayOrderId: order.orderId,
         razorpayPaymentId: 'pay_test_1',
       } as never);
+      assert.equal(verified.transactionId, 'pay_test_1');
+      const customerBooking = await bookings.detail(user.id, bookingId);
+      assert.equal(customerBooking.payment?.transactionId, 'pay_test_1');
+      const capturedTransaction = await h.repo(E.PaymentTransaction).findOneByOrFail({
+        paymentId: customerBooking.payment!.id,
+        gatewayTransactionId: 'pay_test_1',
+        status: 'captured',
+      });
+      assert.equal(capturedTransaction.gatewayTransactionId, 'pay_test_1');
       const booking = await reload(h, bookingId);
       assert.equal(booking.status, 'paid');
       assert.equal(booking.paymentStatus, 'PAID');
       assert.deepEqual(await offersOf(h, f, bookingId), ['near-4:1:pending']);
+    });
+
+    it('rejects a payment callback for an order not created for that booking', async () => {
+      const { user, bookingId } = await unpaidBooking(41);
+      await payments.createOrder(user.id, { bookingId } as never);
+      await rejectsWith(
+        payments.verify(user.id, {
+          bookingId,
+          razorpayOrderId: 'order_not_created_for_booking',
+          razorpayPaymentId: 'pay_test_invalid_order',
+        } as never),
+        400,
+      );
     });
 
     it('refuses a second order once paid', async () => {
