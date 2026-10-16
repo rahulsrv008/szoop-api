@@ -258,6 +258,7 @@ export class AdminCustomersService {
     await this.userRepo.save(customer.user);
 
     await this.notifications.toUser(customer.userId, {
+      app: 'customer',
       title: 'Account blocked',
       message: dto.reason
         ? `Your ClearIt account has been blocked. Reason: ${dto.reason}`
@@ -290,6 +291,7 @@ export class AdminCustomersService {
     await this.userRepo.save(customer.user);
 
     await this.notifications.toUser(customer.userId, {
+      app: 'customer',
       title: 'Account restored',
       message: 'Your ClearIt account has been unblocked. Welcome back!',
       type: 'account',

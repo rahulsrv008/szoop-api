@@ -307,6 +307,7 @@ export class AdminAgentsService {
     await this.agentRepo.save(agent);
 
     await this.notifications.toUser(agent.userId, {
+      app: 'agent',
       title: 'You are approved',
       message: dto.remarks
         ? `Your ClearIt agent account is approved. ${dto.remarks}`
@@ -370,6 +371,7 @@ export class AdminAgentsService {
     await this.agentRepo.save(agent);
 
     await this.notifications.toUser(agent.userId, {
+      app: 'agent',
       title: 'Application rejected',
       message: `Your ClearIt agent application was rejected. Reason: ${dto.reason}`,
       type: 'account',
@@ -408,6 +410,7 @@ export class AdminAgentsService {
     await this.agentRepo.save(agent);
 
     await this.notifications.toUser(agent.userId, {
+      app: 'agent',
       title: 'Account suspended',
       message: `Your ClearIt agent account has been suspended. Reason: ${dto.reason}`,
       type: 'account',
@@ -442,6 +445,7 @@ export class AdminAgentsService {
     await this.agentRepo.save(agent);
 
     await this.notifications.toUser(agent.userId, {
+      app: 'agent',
       title: 'Account reactivated',
       message: 'Your ClearIt agent account is active again. Welcome back!',
       type: 'account',
@@ -483,6 +487,7 @@ export class AdminAgentsService {
     await this.documentRepo.save(document);
 
     await this.notifications.toUser(agent.userId, {
+      app: 'agent',
       title: verified ? 'Document verified' : 'Document rejected',
       message: verified
         ? `Your ${document.documentType} has been verified.`

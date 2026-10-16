@@ -9,6 +9,11 @@ import { CustomerPaymentsService } from 'src/customer/payments/payments.service'
 import { TokenService } from 'src/common/auth/token.service';
 import { WalletService } from 'src/common/services/wallet.service';
 import { AdminCustomersService } from 'src/admin/customers/customers.service';
+import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
+import { CustomerNotificationsService } from 'src/customer/notifications/notifications.service';
+import { AgentNotificationsService } from 'src/agent/notifications/notifications.service';
+import { IdentityService } from 'src/common/auth/identity.service';
+import { PushService } from 'src/integrations/push/push.service';
 
 describe('Admin actions and platform', () => {
   let h: Harness;
@@ -178,6 +183,36 @@ describe('Admin actions and platform', () => {
       const paid = { amount: '300.00', paymentStatus: 'PAID' as const };
       assert.equal(await wallet().refundBooking(booking, paid, 'BOOKING_CANCELLED'), 300);
       assert.equal(await wallet().refundBooking(booking, paid, 'BOOKING_EXPIRED'), 0);
+    });
+  });
+
+  describe('one mobile signed in to both apps', () => {
+    it("agent pushes and notifications never reach the customer app, and the other way round", async () => {
+      const { user } = await f.customer();
+      await h.get(IdentityService).ensureAgent(user.id);
+      await h.get(CustomerNotificationsService).registerDevice(user.id, { token: 'ExponentPushToken[customer-phone]', platform: 'android' } as never);
+      await h.get(AgentNotificationsService).registerDevice(user.id, { token: 'ExponentPushToken[agent-phone]', platform: 'android' } as never);
+
+      const push = h.get(PushService);
+      const original = push.sendToTokens.bind(push);
+      const sentTo: string[][] = [];
+      push.sendToTokens = async (tokens: string[]) => {
+        sentTo.push(tokens);
+        return { sent: tokens.length, provider: 'test' };
+      };
+      try {
+        const dispatch = h.get(NotificationDispatchService);
+        await dispatch.toUser(user.id, { title: 'New job near you', message: 'Accept within 90s', type: 'job_offer', app: 'agent' });
+        await dispatch.toUser(user.id, { title: 'Payment received', message: 'Thanks', type: 'payment', app: 'customer' });
+      } finally {
+        push.sendToTokens = original;
+      }
+      assert.deepEqual(sentTo, [['ExponentPushToken[agent-phone]'], ['ExponentPushToken[customer-phone]']]);
+
+      const agentList = await h.get(AgentNotificationsService).list(user.id, {} as never);
+      const customerList = await h.get(CustomerNotificationsService).list(user.id, {} as never);
+      assert.deepEqual(agentList.items.map((n) => n.title), ['New job near you']);
+      assert.deepEqual(customerList.items.map((n) => n.title), ['Payment received']);
     });
   });
 

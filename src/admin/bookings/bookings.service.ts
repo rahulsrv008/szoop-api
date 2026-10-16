@@ -293,11 +293,14 @@ export class AdminBookingsService {
     // Withdraw any offers still out, so nobody else accepts into a 409.
     await this.dispatch.onAccepted(booking.id, agent.id);
 
-    await this.notifications.toUsers([agent.userId, booking.customer.userId], {
+    // One message, sent to each app separately so neither sees the other's.
+    const assigned = {
       title: 'Agent assigned',
       message: `Booking ${booking.bookingNumber} on ${booking.bookingDate} at ${booking.startTime} is now assigned to ${this.fullName(agent.firstName, agent.lastName) ?? 'an agent'}.`,
       type: 'booking',
-    });
+    };
+    await this.notifications.toUser(agent.userId, { ...assigned, app: 'agent' });
+    await this.notifications.toUser(booking.customer.userId, { ...assigned, app: 'customer' });
 
     await this.audit.record({
       userId: adminId,
@@ -362,16 +365,19 @@ export class AdminBookingsService {
 
     if (previousAgent) {
       await this.notifications.toUser(previousAgent.userId, {
+        app: 'agent',
         title: 'Booking reassigned',
         message: `Booking ${booking.bookingNumber} has been moved to another agent. Reason: ${dto.reason}`,
         type: 'booking',
       });
     }
-    await this.notifications.toUsers([agent.userId, booking.customer.userId], {
+    const changed = {
       title: 'Agent changed',
       message: `Booking ${booking.bookingNumber} on ${booking.bookingDate} at ${booking.startTime} is now assigned to ${this.fullName(agent.firstName, agent.lastName) ?? 'a new agent'}.`,
       type: 'booking',
-    });
+    };
+    await this.notifications.toUser(agent.userId, { ...changed, app: 'agent' });
+    await this.notifications.toUser(booking.customer.userId, { ...changed, app: 'customer' });
 
     await this.audit.record({
       userId: adminId,
@@ -414,6 +420,7 @@ export class AdminBookingsService {
 
     const cancelled = `Booking ${booking.bookingNumber} has been cancelled. Reason: ${dto.reason}`;
     await this.notifications.toUser(booking.customer.userId, {
+      app: 'customer',
       title: 'Booking cancelled',
       message:
         (refundedToWallet > 0
@@ -428,6 +435,7 @@ export class AdminBookingsService {
       });
       if (agent) {
         await this.notifications.toUser(agent.userId, {
+          app: 'agent',
           title: 'Booking cancelled',
           message: cancelled,
           type: 'booking',

@@ -375,6 +375,7 @@ export class AdminEarningsService {
       });
       if (agent) {
         await this.notifications.toUser(agent.userId, {
+          app: 'agent',
           title:
             dto.status === 'PAID' ? 'Incentive paid' : 'Incentive approved',
           message: `Your incentive of ₹${Number(incentive.incentiveAmount).toFixed(2)} for ${incentive.month}/${incentive.year} has been ${dto.status.toLowerCase()}.${
@@ -582,6 +583,7 @@ export class AdminEarningsService {
       });
       if (agent) {
         await this.notifications.toUser(agent.userId, {
+          app: 'agent',
           title: salary.status === 'PAID' ? 'Salary paid' : 'Salary approved',
           message: `Your salary of ₹${Number(salary.netSalary).toFixed(2)} for ${salary.month}/${salary.year} has been ${salary.status.toLowerCase()}.${
             dto.remarks ? ` ${dto.remarks}` : ''

@@ -45,6 +45,7 @@ export const ROUTES = {
     ATTENDANCE: 'agent/attendance',
     EARNINGS: 'agent/earnings',
     INCENTIVES: 'agent/incentives',
+    WORK_SUMMARY: 'agent/work-summary',
     RATINGS: 'agent/ratings',
     NOTIFICATIONS: 'agent/notifications',
     SUPPORT: 'agent/support',

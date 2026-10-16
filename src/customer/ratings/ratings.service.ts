@@ -69,6 +69,7 @@ export class CustomerRatingsService {
     }
 
     await this.notifications.toUser(booking.agent.userId, {
+      app: 'agent',
       title: 'New rating received',
       message: `You were rated ${dto.rating.toFixed(1)} for booking ${booking.bookingNumber}.`,
       type: 'rating',

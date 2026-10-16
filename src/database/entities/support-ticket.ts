@@ -8,6 +8,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import type { NotificationApp } from './notification';
 import { User } from './user';
 import { Booking } from './booking';
 
@@ -42,6 +43,10 @@ export class SupportTicket {
 
   @Column({ type: 'varchar', length: 30, default: 'OPEN' })
   status: string;
+
+  /** Which app this belongs to, so the customer and agent apps never get each other's. Null: older rows. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  app: NotificationApp | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

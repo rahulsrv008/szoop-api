@@ -322,6 +322,7 @@ export class CustomerPaymentsService {
     if (userId && result.opened) {
       await this.notifications
         .toUser(userId, {
+          app: 'customer',
           title: 'Payment received',
           message: `We received ${Number(booking.totalAmount).toFixed(2)} for booking ${booking.bookingNumber}. We are finding an agent for you.`,
           type: 'payment',
@@ -332,6 +333,7 @@ export class CustomerPaymentsService {
     if (userId && result.dueCleared > 0) {
       await this.notifications
         .toUser(userId, {
+          app: 'customer',
           title: 'Payment received',
           message: `Thanks! The ₹${result.dueCleared} due for booking ${booking.bookingNumber} is cleared.`,
           type: 'wallet_due_paid',
@@ -342,6 +344,7 @@ export class CustomerPaymentsService {
     if (userId && result.refundedToWallet > 0) {
       await this.notifications
         .toUser(userId, {
+          app: 'customer',
           title: 'Refund added to your wallet',
           message: `Booking ${booking.bookingNumber} was already closed, so the ₹${result.refundedToWallet} you paid has been added to your wallet.`,
           type: 'wallet_refund',

@@ -324,6 +324,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     const notices = [
       booking.agent &&
         this.notifications.toUser(booking.agent.userId, {
+          app: 'agent',
           title: 'Job removed',
           message: `Booking ${booking.bookingNumber} is no longer assigned to you: ${reason}.`,
           type: 'booking_released',
@@ -332,6 +333,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
       booking.customer &&
         stillOpen &&
         this.notifications.toUser(booking.customer.userId, {
+          app: 'customer',
           title: 'Finding you a new expert',
           message: `Your expert can't make booking ${booking.bookingNumber}, so we're finding someone else.`,
           type: 'booking_released',
@@ -357,6 +359,24 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
         respondedAt: MoreThan(new Date(Date.now() - days * 24 * 3600_000)),
       },
     });
+  }
+
+  /**
+   * When each "Right now" booking's search runs out (dispatch start +
+   * INSTANT_SEARCH_MINUTES), so the agent app can drop it from the list then.
+   */
+  async searchEndsAt(bookingIds: string[]) {
+    if (!bookingIds.length) return new Map<string, Date>();
+    const rows = await this.dispatchRepo.find({
+      where: { bookingId: In(bookingIds) },
+      select: ['bookingId', 'createdAt'],
+    });
+    return new Map(
+      rows.map((row) => [
+        row.bookingId,
+        new Date(row.createdAt.getTime() + INSTANT_SEARCH_MINUTES * 60_000),
+      ]),
+    );
   }
 
   /** Live offers for this agent, by booking id → expiry. */
@@ -706,6 +726,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     if (!withCustomer?.customer) return;
     await this.notifications
       .toUser(withCustomer.customer.userId, {
+        app: 'customer',
         title: 'No expert available right now',
         message: `Sorry, no expert is available at the moment for booking ${booking.bookingNumber}.${
           refundedToWallet > 0 ? ` ₹${refundedToWallet} has been added to your wallet.` : ''
@@ -733,6 +754,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
       picks.map(({ agent, distanceKm: km }) =>
         this.notifications
           .toUser(agent.userId, {
+            app: 'agent',
             title: 'New job near you',
             message: `${what} on ${when}${km === null ? '' : ` · ${km.toFixed(1)} km away`}. Accept within ${OFFER_TTL_SECONDS}s.`,
             type: 'job_offer',
