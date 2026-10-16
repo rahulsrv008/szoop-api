@@ -152,6 +152,8 @@ export class AdminSupportService {
     let noteDelivered = false;
     if (dto.resolutionNote) {
       await this.notifications.toUser(ticket.userId, {
+        // Back to the app the ticket came from (both, for older tickets).
+        app: ticket.app ?? undefined,
         title: `Update on your ticket${ticket.subject ? `: ${ticket.subject}` : ''}`,
         message: dto.resolutionNote,
         type: 'support',

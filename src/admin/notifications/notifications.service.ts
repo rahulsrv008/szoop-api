@@ -45,6 +45,8 @@ export class AdminNotificationsService {
       title: dto.title,
       message: dto.message,
       type: dto.type ?? 'general',
+      // Customers or agents: only that app. All or specific users: every app they use.
+      app: dto.audience === 'CUSTOMERS' ? 'customer' : dto.audience === 'AGENTS' ? 'agent' : undefined,
     });
 
     await this.audit.record({

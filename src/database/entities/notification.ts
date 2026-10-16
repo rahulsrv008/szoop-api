@@ -9,6 +9,9 @@ import {
 } from 'typeorm';
 import { User } from './user';
 
+/** The app a notification or registered phone belongs to (one user can be both a customer and an agent). */
+export type NotificationApp = 'customer' | 'agent';
+
 @Entity('notifications')
 export class Notification {
   @PrimaryGeneratedColumn('uuid')
@@ -33,6 +36,10 @@ export class Notification {
 
   @Column({ name: 'is_read', type: 'boolean', default: false })
   isRead: boolean;
+
+  /** Which app this belongs to, so the customer and agent apps never get each other's. Null: older rows. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  app: NotificationApp | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

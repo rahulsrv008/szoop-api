@@ -227,6 +227,7 @@ export class CustomerBookingsService {
     );
 
     await this.notifications.toUser(userId, {
+      app: 'customer',
       title: 'Booking placed',
       message: `Booking ${booking.bookingNumber} is placed for ${booking.bookingDate} at ${booking.startTime}. Complete the payment so we can find an agent.`,
       type: 'booking',
@@ -726,6 +727,7 @@ export class CustomerBookingsService {
     const ticket = await this.ticketRepo.save(
       this.ticketRepo.create({
         userId,
+        app: 'customer',
         bookingId: booking.id,
         subject: `Change cook · ${booking.bookingNumber}`,
         description: `Customer asked to change the cook on monthly booking ${booking.bookingNumber}. Current cook: ${cook}.`,
@@ -760,6 +762,7 @@ export class CustomerBookingsService {
     if (refundedToWallet > 0) {
       await this.notifications
         .toUser(userId, {
+          app: 'customer',
           title: 'Refund added to your wallet',
           message: `Booking ${booking.bookingNumber} was cancelled. ₹${refundedToWallet} has been added to your wallet.${couponNote(releasedCoupons)}`,
           type: 'wallet_refund',
@@ -770,6 +773,7 @@ export class CustomerBookingsService {
 
     if (booking.agent && booking.agent.id === closed.booking.agentId) {
       await this.notifications.toUser(booking.agent.userId, {
+        app: 'agent',
         title: 'Booking cancelled',
         message: `Booking ${booking.bookingNumber} was cancelled by the customer.`,
         type: 'booking',
@@ -913,6 +917,7 @@ export class CustomerBookingsService {
 
     if (booking.agent && !agentReleased) {
       await this.notifications.toUser(booking.agent.userId, {
+        app: 'agent',
         title: 'Booking rescheduled',
         message: `Booking ${booking.bookingNumber} moved to ${dto.bookingDate} at ${startTime}.`,
         type: 'booking',

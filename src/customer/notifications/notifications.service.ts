@@ -1,12 +1,22 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Notification } from 'src/database/entities';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListCustomerNotificationsQueryDto } from './dto/list-notifications.dto';
 import { RegisterCustomerDeviceTokenDto } from './dto/register-device-token.dto';
 import { RemoveCustomerDeviceTokenDto } from './dto/remove-device-token.dto';
+
+/**
+ * This app's notifications: one user can be both a customer and an agent (same
+ * mobile), so each app lists only its own, plus older untagged ones.
+ */
+const APP = 'customer' as const;
+const mine = (userId: string, extra: { isRead?: boolean } = {}) => [
+  { userId, app: APP, ...extra },
+  { userId, app: IsNull(), ...extra },
+];
 
 @Injectable()
 export class CustomerNotificationsService {
@@ -18,12 +28,12 @@ export class CustomerNotificationsService {
 
   async list(userId: string, query: ListCustomerNotificationsQueryDto) {
     const [notifications, total] = await this.notificationRepo.findAndCount({
-      where: { userId, ...(query.unreadOnly ? { isRead: false } : {}) },
+      where: mine(userId, query.unreadOnly ? { isRead: false } : {}),
       order: { createdAt: 'DESC' },
       ...skipTake(query),
     });
     const unreadCount = await this.notificationRepo.count({
-      where: { userId, isRead: false },
+      where: mine(userId, { isRead: false }),
     });
 
     const items = notifications.map((notification) => ({
@@ -52,10 +62,12 @@ export class CustomerNotificationsService {
   }
 
   async markAllRead(userId: string) {
-    const result = await this.notificationRepo.update(
-      { userId, isRead: false },
-      { isRead: true },
-    );
+    const result = await this.notificationRepo
+      .createQueryBuilder()
+      .update()
+      .set({ isRead: true })
+      .where('user_id = :userId AND is_read = false AND (app = :app OR app IS NULL)', { userId, app: APP })
+      .execute();
     return { updated: result.affected ?? 0 };
   }
 
@@ -64,6 +76,7 @@ export class CustomerNotificationsService {
       userId,
       dto.token,
       dto.platform,
+      APP,
     );
     return { id: device.id, platform: device.platform, isActive: true };
   }

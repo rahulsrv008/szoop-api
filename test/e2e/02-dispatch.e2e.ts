@@ -376,6 +376,31 @@ describe('Push dispatch', () => {
       }
     });
 
+    it('the open-jobs list tells the agent app when each job stops being open', async () => {
+      const base = area(28);
+      const a = await f.agent('e-list', { live: north(base, 0.5), skills: [skill] });
+      const instant = await instantJob(base);
+      await dispatch.kick(instant.id);
+      const scheduled = await job(base);
+
+      const items = (await agentBookings.list(a.userId, { scope: 'available', limit: 50 } as never)).items as Array<{
+        id: string;
+        expiresAt: string | null;
+      }>;
+      const [dispatchRow] = await h.ds.query(`SELECT created_at FROM booking_dispatches WHERE booking_id = $1`, [instant.id]);
+      const searchEnd = new Date(dispatchRow.created_at).getTime() + 10 * 60_000;
+      // "Right now": the 10-minute search ends before its start (~15 min away).
+      const instantItem = items.find((item) => item.id === instant.id);
+      assert.ok(instantItem?.expiresAt, 'instant job has an expiry');
+      assert.ok(Math.abs(Date.parse(instantItem!.expiresAt!) - searchEnd) < 2000, instantItem!.expiresAt!);
+      // Scheduled: open until its start.
+      const scheduledItem = items.find((item) => item.id === scheduled.id);
+      assert.equal(
+        Date.parse(scheduledItem!.expiresAt!),
+        new Date(`${scheduled.bookingDate}T${scheduled.startTime}`).getTime(),
+      );
+    });
+
     it('a scheduled job keeps searching past 10 minutes', async () => {
       const base = area(22);
       await f.agent('s1', { live: north(base, 1), skills: [skill] });

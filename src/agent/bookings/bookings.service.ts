@@ -214,10 +214,27 @@ export class AgentBookingsService {
       page.map((booking) => this.toListItem(booking, agent.id)),
       page,
     );
-    const withOffers = this.withDistanceKm(origin, items, page).map((item) => ({
-      ...item,
-      offerExpiresAt: offers.get(item.id)?.toISOString() ?? null,
-    }));
+    // When each job stops being open, so the app can drop it without refetching:
+    // its start, or sooner for a "Right now" job whose 10-minute search ends first.
+    // Multi-visit plans stay listed for their next visit, so they get none.
+    const searchEnds = await this.dispatch.searchEndsAt(
+      page.filter((booking) => booking.bookingMode === 'INSTANT').map((booking) => booking.id),
+    );
+    const withOffers = this.withDistanceKm(origin, items, page).map((item) => {
+      const start = due.get(item.id);
+      const searchEnd = searchEnds.get(item.id);
+      const expiresAt =
+        item.visitsTotal > 1 || !start
+          ? null
+          : searchEnd && searchEnd < start
+            ? searchEnd
+            : start;
+      return {
+        ...item,
+        offerExpiresAt: offers.get(item.id)?.toISOString() ?? null,
+        expiresAt: expiresAt?.toISOString() ?? null,
+      };
+    });
     return paginated(withOffers, eligible.length, query);
   }
 
@@ -727,6 +744,7 @@ export class AgentBookingsService {
     const customerUserId = booking.customer?.userId;
     if (!customerUserId) return Promise.resolve(undefined);
     return this.notifications.toUser(customerUserId, {
+      app: 'customer',
       ...input,
       data: { bookingId: booking.id, bookingNumber: booking.bookingNumber },
     });

@@ -30,6 +30,7 @@ export class AgentSupportService {
     const ticket = await this.ticketRepo.save(
       this.ticketRepo.create({
         userId,
+        app: 'agent',
         bookingId: dto.bookingId ?? null,
         subject: dto.subject,
         description: dto.description,

@@ -38,6 +38,7 @@ export { SalaryRecord } from './salary-record';
 export { Rating } from './rating';
 export { Review } from './review';
 export { Notification } from './notification';
+export type { NotificationApp } from './notification';
 export { SupportTicket } from './support-ticket';
 export { Coupon } from './coupon';
 export { CouponUsage } from './coupon-usage';

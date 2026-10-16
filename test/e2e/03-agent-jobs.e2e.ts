@@ -4,6 +4,7 @@ import { Factory, Harness, area, at, dayOffset, north, offersOf, reload, rejects
 import * as E from 'src/database/entities';
 import { DispatchService } from 'src/dispatch/dispatch.service';
 import { AgentBookingsService } from 'src/agent/bookings/bookings.service';
+import { AgentWorkSummaryService } from 'src/agent/earnings/work-summary.service';
 import { AgentAvailabilityService } from 'src/agent/availability/availability.service';
 import { CustomerBookingsService } from 'src/customer/bookings/bookings.service';
 
@@ -233,6 +234,75 @@ describe('Agent jobs', () => {
       await jobs.complete(a.userId, plan.id, {} as never);
       after = await reload(h, plan.id);
       assert.equal(after.status, 'completed');
+    });
+  });
+
+  describe('work summary (salaried agents: work done, not money per job)', () => {
+    it('counts each finished job and plan visit, hours from start to finish, on-time starts and the salary', async () => {
+      const base = area(10);
+      const a = await f.agent('salaried', { live: base, skills: [skill] });
+
+      // A single job booked 3 hours ahead and started now: on time; worked 90 minutes.
+      const single = await job(base, { when: at(3 * 60) });
+      await jobs.accept(a.userId, single.id);
+      await jobs.arrived(a.userId, single.id);
+      await jobs.start(a.userId, single.id, { otp: '4321' } as never);
+      await h
+        .repo(E.BookingStatusHistory)
+        .update({ bookingId: single.id, status: 'ongoing' }, { createdAt: new Date(Date.now() - 90 * 60_000) });
+      await jobs.complete(a.userId, single.id, {} as never);
+
+      // A plan: its first visit was due an hour ago (late), its second is due in 2 hours (early, so on time).
+      const plan = await job(base, { planType: 'MONTHLY', when: at(-60) });
+      const late = at(-60);
+      const early = at(120);
+      await h.repo(E.BookingVisit).save(
+        [late, early].map((when, index) => ({
+          bookingId: plan.id,
+          visitDate: when.date,
+          shift: 'morning',
+          startTime: when.time,
+          otp: index === 0 ? '4321' : '8765',
+          status: 'pending',
+        })) as never,
+      );
+      await h.repo(E.Booking).update({ id: plan.id }, { status: 'accepted', agentId: a.id });
+      await jobs.start(a.userId, plan.id, { otp: '4321' } as never);
+      await jobs.complete(a.userId, plan.id, {} as never);
+      await jobs.start(a.userId, plan.id, { otp: '8765' } as never);
+      await jobs.complete(a.userId, plan.id, {} as never);
+
+      const now = new Date();
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      await h.repo(E.SalaryRecord).save([
+        { agentId: a.id, month: now.getMonth() + 1, year: now.getFullYear(), fixedSalary: '18000', incentive: '1500', deductions: '500', netSalary: '19000', status: 'PENDING' },
+        { agentId: a.id, month: lastMonth.getMonth() + 1, year: lastMonth.getFullYear(), fixedSalary: '18000', incentive: '1200', deductions: '0', netSalary: '19200', status: 'PAID' },
+      ] as never);
+
+      const summary = await h.get(AgentWorkSummaryService).summary(a.userId);
+      assert.equal(summary.today.jobsDone, 3, 'the single job and both plan visits');
+      assert.equal(summary.month.jobsCompleted, 3);
+      assert.equal(summary.lifetime.jobsCompleted, 3);
+      assert.equal(summary.month.onTimePercent, 67, 'two of three started within 10 minutes of their slot');
+      assert.ok(summary.month.hoursWorked >= 1.4 && summary.month.hoursWorked <= 1.6, `hours ${summary.month.hoursWorked}`);
+      assert.equal(summary.last7Days.length, 7);
+      assert.equal(summary.last7Days[6].jobs, 3);
+      assert.deepEqual(summary.salary.current, {
+        month: now.getMonth() + 1, year: now.getFullYear(), fixedSalary: 18000, incentive: 1500, deductions: 500, netSalary: 19000, status: 'PENDING',
+      });
+      assert.equal(summary.salary.past.length, 1);
+      assert.equal(summary.salary.past[0].netSalary, 19200);
+      assert.equal(summary.salary.past[0].status, 'PAID');
+    });
+
+    it('a new agent gets zeros, no on-time figure and no salary yet', async () => {
+      const a = await f.agent('newcomer', { live: area(11), skills: [skill] });
+      const summary = await h.get(AgentWorkSummaryService).summary(a.userId);
+      assert.equal(summary.month.jobsCompleted, 0);
+      assert.equal(summary.month.onTimePercent, null);
+      assert.equal(summary.salary.current, null);
+      assert.deepEqual(summary.salary.past, []);
+      assert.deepEqual(summary.rating, { average: null, count: 0, latest: [] });
     });
   });
 

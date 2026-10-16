@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Notification } from 'src/database/entities';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
@@ -9,6 +9,16 @@ import {
   RegisterDeviceTokenDto,
   RemoveDeviceTokenDto,
 } from './dto/device-token.dto';
+
+/**
+ * This app's notifications: one user can be both a customer and an agent (same
+ * mobile), so each app lists only its own, plus older untagged ones.
+ */
+const APP = 'agent' as const;
+const mine = (userId: string, extra: { isRead?: boolean } = {}) => [
+  { userId, app: APP, ...extra },
+  { userId, app: IsNull(), ...extra },
+];
 
 /** Notifications hang off `users.id`, so no agent lookup is needed here. */
 @Injectable()
@@ -21,13 +31,13 @@ export class AgentNotificationsService {
 
   async list(userId: string, query: ListAgentNotificationsDto) {
     const [rows, total] = await this.notificationRepo.findAndCount({
-      where: { userId, ...(query.unreadOnly ? { isRead: false } : {}) },
+      where: mine(userId, query.unreadOnly ? { isRead: false } : {}),
       order: { createdAt: 'DESC' },
       ...skipTake(query),
     });
 
     const unreadCount = await this.notificationRepo.count({
-      where: { userId, isRead: false },
+      where: mine(userId, { isRead: false }),
     });
 
     return {
@@ -59,15 +69,17 @@ export class AgentNotificationsService {
   }
 
   async markAllRead(userId: string) {
-    const result = await this.notificationRepo.update(
-      { userId, isRead: false },
-      { isRead: true },
-    );
+    const result = await this.notificationRepo
+      .createQueryBuilder()
+      .update()
+      .set({ isRead: true })
+      .where('user_id = :userId AND is_read = false AND (app = :app OR app IS NULL)', { userId, app: APP })
+      .execute();
     return { updated: result.affected ?? 0 };
   }
 
   registerDevice(userId: string, dto: RegisterDeviceTokenDto) {
-    return this.dispatch.registerDevice(userId, dto.token, dto.platform);
+    return this.dispatch.registerDevice(userId, dto.token, dto.platform, APP);
   }
 
   removeDevice(userId: string, dto: RemoveDeviceTokenDto) {
