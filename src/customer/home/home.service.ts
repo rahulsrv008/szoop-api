@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { HomeCategory, HomePopularItem } from 'src/database/entities';
-import { normalizeHomeScreen } from 'src/common/home-screen';
+import { normalizeHomeScreen, resolveHomeTabs } from 'src/common/home-screen';
 import {
   SETTING_KEYS,
   SettingsService,
@@ -52,9 +52,13 @@ export class CustomerHomeService {
       this.settings.get(SETTING_KEYS.CUSTOMER_HOME_SCREEN, null),
     ]);
 
+    const screen = normalizeHomeScreen(homeScreen);
+    const tabs = resolveHomeTabs(screen.tabs, categories);
+
     return {
       taxPercent,
-      screen: normalizeHomeScreen(homeScreen),
+      screen: { ...screen, tabs },
+      tabs,
       cookPricing: {
         morningPerPerson,
         eveningPerPerson,

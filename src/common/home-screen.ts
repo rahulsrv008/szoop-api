@@ -11,9 +11,22 @@ export type HomeScreenBanner = {
 export type HomeScreenTrust = { icon: string; label: string };
 export type HomeScreenStep = { n: string; title: string; body: string };
 
+/**
+ * A top tab on the customer home (Swiggy-style). `categoryIds` pins home categories to the tab;
+ * when empty, categories are matched by the tab id's default keywords (see TAB_MATCHERS).
+ */
+export type HomeScreenTab = {
+  id: string;
+  label: string;
+  icon: string;
+  color: string;
+  categoryIds: string[];
+};
+
 export type HomeScreenConfig = {
   searchPlaceholder: string;
   gridTitle: string;
+  tabs: HomeScreenTab[];
   banners: HomeScreenBanner[];
   trust: HomeScreenTrust[];
   howTitle: string;
@@ -26,6 +39,11 @@ export type HomeScreenConfig = {
 export const DEFAULT_HOME_SCREEN: HomeScreenConfig = {
   searchPlaceholder: 'Search kitchen, bathroom, laundry…',
   gridTitle: 'What are you looking for?',
+  tabs: [
+    { id: 'quick', label: 'Quick', icon: 'flash', color: '#6B21A8', categoryIds: [] },
+    { id: 'monthly', label: 'Monthly Pass', icon: 'calendar', color: '#6B21A8', categoryIds: [] },
+    { id: 'salon', label: 'Salon', icon: 'sparkles', color: '#6B21A8', categoryIds: [] },
+  ],
   banners: [
     {
       id: 'b1',
@@ -53,7 +71,7 @@ export const DEFAULT_HOME_SCREEN: HomeScreenConfig = {
     { icon: 'navigate', label: 'Live tracking' },
     { icon: 'lock-closed', label: 'OTP check-in' },
   ],
-  howTitle: 'How Oseedy works',
+  howTitle: 'How Szoop works',
   howSteps: [
     { n: '1', title: 'Pick a service', body: 'Cleaning, cook, diet meals…' },
     { n: '2', title: 'Choose time & duration', body: 'Right now or any slot you like' },
@@ -69,9 +87,60 @@ function text(value: unknown, fallback: string, max: number) {
   return (next || fallback).slice(0, max);
 }
 
+/** Default category matching per well-known tab id, used when a tab has no pinned categoryIds. */
+const TAB_MATCHERS: Record<string, RegExp> = {
+  quick: /express|quick|hourly|on[\s-]?demand|instant|by the hour/i,
+  monthly: /monthly|pass|subscription|every day/i,
+  salon: /salon|beauty|luxe|aira|spa|groom/i,
+};
+
+type TabCategory = { id: string; title: string; subtitle: string | null };
+
+/**
+ * Gives every tab the ids of the (active) categories it shows. Each category lands in one tab;
+ * categories no tab claims go to the first tab so nothing disappears. Empty tabs are dropped.
+ */
+export function resolveHomeTabs(tabs: HomeScreenTab[], categories: TabCategory[]): HomeScreenTab[] {
+  const activeIds = new Set(categories.map((c) => c.id));
+  const claimed = new Set<string>();
+  const resolved = tabs.map((tab) => {
+    const pinned = tab.categoryIds.filter((id) => activeIds.has(id) && !claimed.has(id));
+    pinned.forEach((id) => claimed.add(id));
+    return { ...tab, categoryIds: pinned };
+  });
+  for (const tab of resolved) {
+    const matcher = TAB_MATCHERS[tab.id];
+    if (tab.categoryIds.length || !matcher) continue;
+    for (const category of categories) {
+      if (claimed.has(category.id)) continue;
+      if (matcher.test(`${category.title} ${category.subtitle ?? ''}`)) {
+        tab.categoryIds.push(category.id);
+        claimed.add(category.id);
+      }
+    }
+  }
+  const leftovers = categories.filter((c) => !claimed.has(c.id)).map((c) => c.id);
+  if (leftovers.length && resolved.length) resolved[0].categoryIds.push(...leftovers);
+  return resolved.filter((tab) => tab.categoryIds.length);
+}
+
 export function normalizeHomeScreen(value: unknown): HomeScreenConfig {
   const raw = value && typeof value === 'object' ? (value as Partial<HomeScreenConfig>) : {};
   const base = DEFAULT_HOME_SCREEN;
+  const tabs = Array.isArray(raw.tabs)
+    ? raw.tabs.slice(0, 6).map((item, index) => {
+        const tab = item && typeof item === 'object' ? (item as Partial<HomeScreenTab>) : {};
+        return {
+          id: text(tab.id, `tab-${index + 1}`, 40),
+          label: text(tab.label, `Tab ${index + 1}`, 24),
+          icon: text(tab.icon, 'grid', 40),
+          color: text(tab.color, '#6B21A8', 20),
+          categoryIds: Array.isArray(tab.categoryIds)
+            ? tab.categoryIds.filter((id): id is string => typeof id === 'string').slice(0, 20)
+            : [],
+        } satisfies HomeScreenTab;
+      })
+    : base.tabs;
   const banners = Array.isArray(raw.banners)
     ? raw.banners
         .slice(0, 6)
@@ -111,6 +180,7 @@ export function normalizeHomeScreen(value: unknown): HomeScreenConfig {
   return {
     searchPlaceholder: text(raw.searchPlaceholder, base.searchPlaceholder, 80),
     gridTitle: text(raw.gridTitle, base.gridTitle, 80),
+    tabs: tabs.length ? tabs : base.tabs,
     banners: banners.length ? banners : base.banners,
     trust: trust.length ? trust : base.trust,
     howTitle: text(raw.howTitle, base.howTitle, 80),
