@@ -140,7 +140,10 @@ export class CustomerPaymentsService {
     }
 
     const mode = transaction.gatewayResponse?.mode;
-    const validStub = mode === 'stub' && check.skipped && !isDeployedEnv();
+    const validStub =
+      mode === 'stub' &&
+      (check.skipped || this.razorpay.demoPaymentMode) &&
+      !isDeployedEnv();
     const validRazorpay = mode === 'razorpay' && check.verified;
     if (!validStub && !validRazorpay) {
       throw new BadRequestException('Payment signature verification failed');

@@ -24,15 +24,25 @@ export class RazorpayService {
     return this.config.get<string>('RAZORPAY_KEY_ID') || null;
   }
 
+  get demoPaymentMode() {
+    return (
+      (this.config.get<string>('DEMO_PAYMENT_MODE') ?? 'false')
+        .trim()
+        .toLowerCase() === 'true'
+    );
+  }
+
   async createOrder(
     amountPaise: number,
     receipt: string,
   ): Promise<GatewayOrder> {
     const keyId = this.keyId;
     const secret = this.config.get<string>('RAZORPAY_KEY_SECRET');
-    if (!keyId && !secret && !isDeployedEnv()) {
+    if (!isDeployedEnv() && (this.demoPaymentMode || (!keyId && !secret))) {
       this.logger.warn(
-        'RAZORPAY_KEY_ID missing — issuing a stub order id',
+        this.demoPaymentMode
+          ? 'Demo payment mode enabled — issuing a stub order id'
+          : 'RAZORPAY_KEY_ID missing — issuing a stub order id',
         'RazorpayService',
       );
       return {
