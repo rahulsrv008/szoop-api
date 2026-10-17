@@ -53,12 +53,15 @@ export class AgentBookingsController {
 
   @Post(':id/accept')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Claim an available job' })
+  @ApiOperation({
+    summary: 'Claim an available job ("Right now" jobs also set the agent on the way; send where they are)',
+  })
   accept(
     @CurrentUser('sub') userId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: OnTheWayDto,
   ) {
-    return this.bookingsService.accept(userId, id);
+    return this.bookingsService.accept(userId, id, dto);
   }
 
   @Post(':id/reject')

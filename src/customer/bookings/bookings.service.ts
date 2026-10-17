@@ -700,6 +700,31 @@ export class CustomerBookingsService {
     };
   }
 
+  /**
+   * "Find another expert": once the start time has passed and the expert
+   * hasn't started, the job goes back to dispatch with a new start 15 minutes
+   * ahead (and a wallet refund if nobody takes it). Counts against the expert.
+   */
+  async replaceExpert(userId: string, id: string) {
+    const customerId = await this.identity.requireCustomerId(userId);
+    await this.findOwn(customerId, id);
+    const result = await this.dispatch.replaceLateExpert(id);
+    if (!result.ok) {
+      throw new BadRequestException(
+        result.reason === 'already'
+          ? "We're already finding you another expert"
+          : result.reason === 'not_late'
+            ? 'You can ask for another expert once the start time has passed and the job hasn’t started'
+            : 'This booking has moved on, please refresh',
+      );
+    }
+    return {
+      bookingId: id,
+      status: 'paid',
+      newStartTime: result.newStart.toISOString(),
+    };
+  }
+
   async requestCookChange(userId: string, id: string) {
     const customerId = await this.identity.requireCustomerId(userId);
     const booking = await this.findOwn(customerId, id, ['agent']);

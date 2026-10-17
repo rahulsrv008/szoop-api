@@ -201,6 +201,35 @@ describe('Agent jobs', () => {
       }
     });
 
+    it('accepting a "Right now" job also sets off: on the way, one message with the OTP', async () => {
+      const base = area(12);
+      const a = await f.agent('instant', { live: base, skills: [skill] });
+      const booking = await job(base, { when: at(15) });
+      await h.repo(E.Booking).update({ id: booking.id }, { bookingMode: 'INSTANT', startOtp: '4321' });
+
+      await jobs.accept(a.userId, booking.id, { latitude: base.lat, longitude: base.lng } as never);
+      assert.equal((await reload(h, booking.id)).status, 'arriving');
+
+      const notices = await h.repo(E.Notification).find({ where: { userId: customerUser.id } });
+      const mine = notices.filter((n) => n.message.includes(booking.bookingNumber));
+      assert.equal(mine.filter((n) => n.notificationType === 'booking_accepted').length, 0);
+      const onTheWay = mine.filter((n) => n.notificationType === 'booking_arriving');
+      assert.equal(onTheWay.length, 1);
+      assert.ok(onTheWay[0].message.includes('4321'), 'the OTP to share is in that one message');
+
+      // A retry of the accept changes nothing and sends nothing more.
+      await jobs.accept(a.userId, booking.id);
+      assert.equal((await reload(h, booking.id)).status, 'arriving');
+    });
+
+    it('a scheduled job is just accepted: the agent sets off later', async () => {
+      const base = area(13);
+      const a = await f.agent('scheduled', { live: base, skills: [skill] });
+      const booking = await job(base, { when: at(3 * 60) });
+      await jobs.accept(a.userId, booking.id);
+      assert.equal((await reload(h, booking.id)).status, 'accepted');
+    });
+
     it('cannot start a job before accepting it', async () => {
       const base = area(8);
       const a = await f.agent('eager', { live: base, skills: [skill] });
@@ -401,10 +430,11 @@ describe('Agent jobs', () => {
   });
 
   describe('when things go wrong', () => {
-    it('an accepted job stays with its agent after the start time passes', async () => {
+    it('an agent on the way keeps the job after the start time passes', async () => {
+      // One who never set off is handed back (see 07-held-jobs); one on the way is just late.
       const base = area(14);
       const a = await f.agent('late-arrival', { live: base, skills: [skill] });
-      const late = await job(base, { status: 'accepted', agentId: a.id, when: at(-25) });
+      const late = await job(base, { status: 'arriving', agentId: a.id, when: at(-25) });
       await dispatch.tick();
       assert.equal((await reload(h, late.id)).agentId, a.id);
     });

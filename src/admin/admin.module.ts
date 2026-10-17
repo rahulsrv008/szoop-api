@@ -5,6 +5,7 @@ import { AdminDashboardModule } from './dashboard/dashboard.module';
 import { AdminCustomersModule } from './customers/customers.module';
 import { AdminAgentsModule } from './agents/agents.module';
 import { AdminAttendanceModule } from './attendance/attendance.module';
+import { AdminMissedJobsModule } from './missed-jobs/missed-jobs.module';
 import { AdminServicesModule } from './services/services.module';
 import { AdminPricingModule } from './pricing/pricing.module';
 import { AdminBookingsModule } from './bookings/bookings.module';
@@ -29,6 +30,7 @@ import { AdminHomeContentModule } from './home-content/home-content.module';
     AdminCustomersModule,
     AdminAgentsModule,
     AdminAttendanceModule,
+    AdminMissedJobsModule,
     AdminServicesModule,
     AdminPricingModule,
     AdminBookingsModule,
