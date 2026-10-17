@@ -345,7 +345,49 @@ export class HomeStepDto {
   body: string;
 }
 
+export class HomeTabDto {
+  @ApiProperty({ example: 'quick' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  id: string;
+
+  @ApiProperty({ example: 'Quick' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(24)
+  label: string;
+
+  @ApiProperty({ example: 'flash', description: 'Ionicons name' })
+  @IsString()
+  @MaxLength(40)
+  icon: string;
+
+  @ApiProperty({ example: '#6B21A8' })
+  @IsString()
+  @MaxLength(20)
+  color: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Home category ids shown in this tab; empty = match by tab id (quick/monthly/salon)',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsUUID('all', { each: true })
+  categoryIds?: string[];
+}
+
 export class UpdateHomeScreenDto {
+  @ApiPropertyOptional({ type: [HomeTabDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @ValidateNested({ each: true })
+  @Type(() => HomeTabDto)
+  tabs?: HomeTabDto[];
+
   @ApiProperty()
   @IsString()
   @MaxLength(80)

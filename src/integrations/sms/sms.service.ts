@@ -50,7 +50,7 @@ export class SmsService {
     }
     const template =
       this.config.get<string>('SMS_OTP_TEMPLATE') ||
-      'Your Oseedy verification code is {{code}}. It expires shortly.';
+      'Your Szoop verification code is {{code}}. It expires shortly.';
     return this.send(mobile, template.replace('{{code}}', code), code);
   }
 
@@ -322,7 +322,7 @@ export class SmsService {
     const listed = await this.twilioForm('https://verify.twilio.com/v2/Services', {}, 'GET');
     const services = (listed.json?.services as { sid?: string; friendly_name?: string }[] | undefined) ?? [];
     const existing =
-      services.find((s) => (s.friendly_name || '').toLowerCase() === 'oseedy') || services[0];
+      services.find((s) => (s.friendly_name || '').toLowerCase() === 'szoop') || services[0];
     if (existing?.sid) {
       this.cachedVerifySid = existing.sid;
       return { ok: true, sid: existing.sid };
@@ -330,7 +330,7 @@ export class SmsService {
 
     const codeLength = (this.config.get<string>('OTP_LENGTH') || '4').trim();
     const created = await this.twilioForm('https://verify.twilio.com/v2/Services', {
-      FriendlyName: 'Oseedy',
+      FriendlyName: 'Szoop',
       CodeLength: codeLength,
     });
     const sid = typeof created.json?.sid === 'string' ? created.json.sid : '';
