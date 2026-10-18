@@ -26,6 +26,7 @@ import { h3CellsWithinKm } from 'src/common/geo/geo.util';
 import { AgentSkillsService } from 'src/agent/skills/skills.service';
 import { EligibilityService, pairKey } from './eligibility.service';
 import { DbPoolMonitor } from 'src/database/db-pool-monitor.service';
+import { HeldJobActions, HeldJobsService } from './held-jobs.service';
 import { BOOKING_MODE_SQL, DISPATCH_SCHEMA_SQL } from './dispatch.schema';
 import {
   DISPATCH_WAVES,
@@ -95,6 +96,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     private readonly history: BookingHistoryService,
     private readonly dbPool: DbPoolMonitor,
     private readonly closure: BookingClosureService,
+    private readonly heldJobs: HeldJobsService,
   ) {}
 
   async onModuleInit() {
@@ -184,10 +186,27 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
       for (const { id } of due) {
         await this.step(`advance booking ${id}`, () => this.advance(id)).catch(() => undefined);
       }
+      // Reminders and no-shows for jobs agents hold but haven't started.
+      await this.step('watch held jobs', () => this.heldJobs.sweep(this.heldJobActions())).catch(
+        () => undefined,
+      );
       return { processed: due.length };
     } finally {
       this.ticking = false;
     }
+  }
+
+  /** The customer's "Find another expert" (see HeldJobsService.replaceLateExpert). */
+  replaceLateExpert(bookingId: string) {
+    return this.heldJobs.replaceLateExpert(bookingId, this.heldJobActions());
+  }
+
+  private heldJobActions(): HeldJobActions {
+    return {
+      release: (bookingId, reason) => this.release(bookingId, reason),
+      recordNoShow: (bookingId, agentId) => this.excludeAgent(bookingId, agentId, 'released'),
+      closeDispatch: (bookingId) => this.close(bookingId),
+    };
   }
 
   private async step<T>(name: string, run: () => Promise<T>): Promise<T> {

@@ -96,6 +96,19 @@ export class CustomerBookingsController {
   }
 
   @RateLimit(RATE_LIMITS.BOOKING_CHANGE)
+  @Post(':id/replace-expert')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'The expert is late (start time passed, not started): find another one',
+  })
+  replaceExpert(
+    @CurrentUser('sub') userId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.bookingsService.replaceExpert(userId, id);
+  }
+
+  @RateLimit(RATE_LIMITS.BOOKING_CHANGE)
   @Post(':id/cancel')
   @HttpCode(200)
   @ApiOperation({ summary: 'Cancel a booking that has not started yet' })

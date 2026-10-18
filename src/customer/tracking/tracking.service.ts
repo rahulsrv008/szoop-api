@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { AgentLocation, Booking, BookingStatusHistory } from 'src/database/entities';
+import { AgentLocation, Booking, BookingStatusHistory, BookingVisit } from 'src/database/entities';
+import { canReplaceExpert } from 'src/dispatch/held-jobs.service';
 import { IdentityService } from 'src/common/auth/identity.service';
 import { haversineKm } from 'src/common/geo/geo.util';
 import { BookingEtaService } from 'src/integrations/maps/booking-eta.service';
@@ -13,6 +14,8 @@ export class CustomerTrackingService {
     private readonly bookingRepo: Repository<Booking>,
     @InjectRepository(AgentLocation)
     private readonly locationRepo: Repository<AgentLocation>,
+    @InjectRepository(BookingVisit)
+    private readonly visitRepo: Repository<BookingVisit>,
     @InjectRepository(BookingStatusHistory)
     private readonly historyRepo: Repository<BookingStatusHistory>,
     private readonly identity: IdentityService,
@@ -88,15 +91,20 @@ export class CustomerTrackingService {
       lastPing: moving && ping ? { ...ping, recordedAt: ping.recordedAt.toISOString() } : null,
       destination: moving ? destination : null,
       distanceKm: !moving || distanceKm === null ? null : Math.round(distanceKm * 10) / 10,
+      // No arrival time until the expert taps "I'm on my way": before that, they may not have set off at all.
       etaMinutes: eta
         ? eta.remainingMinutes
-        : distanceKm === null || !moving
+        : distanceKm === null || booking.status !== 'arriving'
           ? null
           : Math.max(1, Math.round((distanceKm / 18) * 60)),
-      etaSource: eta?.source ?? (distanceKm === null || !moving ? null : 'estimate'),
+      etaSource: eta?.source ?? (distanceKm === null || booking.status !== 'arriving' ? null : 'estimate'),
       routeDistanceKm: eta?.distanceKm ?? null,
       durationMinutes: booking.durationMinutes,
       startedAt: started?.createdAt ?? null,
+      // The start time has passed and the expert hasn't started: the app offers "Find another expert".
+      canReplaceExpert:
+        moving &&
+        canReplaceExpert(booking, (await this.visitRepo.count({ where: { bookingId: booking.id } })) > 0),
     };
   }
 }

@@ -66,6 +66,11 @@ const OPEN_POOL_LOOKBACK_DAYS = 35;
 /** Open-job coordinates are rounded to ~1 km: enough for a map pin, not enough to find the door. */
 const OPEN_JOB_COORD_DECIMALS = 2;
 
+/** The start OTP for the customer to share, when the booking has one. */
+function otpLine(booking: Booking) {
+  return booking.startOtp ? ` Share start OTP ${booking.startOtp} when they arrive.` : '';
+}
+
 @Injectable()
 export class AgentBookingsService {
   private readonly logger = new Logger(AgentBookingsService.name);
@@ -281,13 +286,23 @@ export class AgentBookingsService {
     };
   }
 
-  async accept(userId: string, bookingId: string) {
+  /**
+   * Claims an open job. A "Right now" job is accepted and set off on in one
+   * step: the customer is already waiting, so there's no "accepted but not
+   * moving" state for it (the no-show rules in HeldJobsService then only
+   * have to watch for a job that's never started).
+   */
+  async accept(userId: string, bookingId: string, dto: OnTheWayDto = {}) {
     const agent = await this.context.requireApprovedAgent(userId);
 
     const target = await this.bookingRepo.findOne({ where: { id: bookingId } });
     if (!target) throw new NotFoundException('Booking not found');
     // A retry after a slow first attempt: the job is already this agent's.
     if (target.agentId === agent.id && target.status !== 'cancelled' && target.status !== 'expired') {
+      // The first attempt may have claimed a "Right now" job without getting as far as setting off.
+      if (target.bookingMode === 'INSTANT' && target.status === 'accepted') {
+        return this.setOff(agent, await this.requireBooking(bookingId), userId, dto);
+      }
       return this.toStatusResponse(target);
     }
     const due = await this.eligibility.nextStarts([target]);
@@ -337,13 +352,15 @@ export class AgentBookingsService {
       );
     }
 
+    if (booking.bookingMode === 'INSTANT') {
+      // One message for the customer: on the way, when, and the OTP to share.
+      return this.setOff(agent, booking, userId, dto);
+    }
+
     const agentName = agent.firstName || 'Your expert';
-    const otpLine = booking.startOtp
-      ? ` Share start OTP ${booking.startOtp} when they arrive.`
-      : '';
     await this.notifyCustomer(booking, {
       title: 'Expert assigned',
-      message: `${agentName} has accepted booking ${booking.bookingNumber}.${otpLine}`,
+      message: `${agentName} has accepted booking ${booking.bookingNumber}.${otpLine(booking)}`,
       type: 'booking_accepted',
     });
 
@@ -402,8 +419,15 @@ export class AgentBookingsService {
   async arrived(userId: string, bookingId: string, dto: OnTheWayDto = {}) {
     const agent = await this.context.requireApprovedAgent(userId);
     const booking = await this.requireAssignedBooking(bookingId, agent.id);
+    return this.setOff(agent, booking, userId, dto);
+  }
+
+  /** "On the way": records where the agent set off from, routes an ETA and tells the customer. */
+  private async setOff(agent: Agent, booking: Booking, userId: string, dto: OnTheWayDto) {
     // A retry after a slow first attempt: already on the way, just refresh the ETA.
     const alreadyOnTheWay = booking.status === 'arriving';
+    // Set off straight from accepting ("Right now"): the customer hasn't had the OTP yet.
+    const fromAccept = booking.status === 'accepted' && booking.bookingMode === 'INSTANT';
 
     const origin = await this.setOffFrom(agent, booking.id, dto);
     const destination = addressPoint(booking.address);
@@ -420,9 +444,11 @@ export class AgentBookingsService {
       const name = agent.firstName || 'Your agent';
       await this.notifyCustomer(booking, {
         title: eta ? `Expert arriving in ~${eta.minutes} min` : 'Agent on the way',
-        message: eta
-          ? `${name} is on the way for booking ${booking.bookingNumber} and should reach you in about ${eta.minutes} min (${eta.distanceKm} km).`
-          : `${name} is arriving for booking ${booking.bookingNumber}.`,
+        message: `${
+          eta
+            ? `${name} is on the way for booking ${booking.bookingNumber} and should reach you in about ${eta.minutes} min (${eta.distanceKm} km).`
+            : `${name} is arriving for booking ${booking.bookingNumber}.`
+        }${fromAccept ? otpLine(booking) : ''}`,
         type: 'booking_arriving',
       });
     }
@@ -814,6 +840,8 @@ export class AgentBookingsService {
       isAssignedToMe: isMine,
       paymentMode: booking.paymentMode,
       paymentStatus: booking.paymentStatus,
+      // "Right now" jobs are accepted and set off on in one tap.
+      bookingMode: booking.bookingMode,
     };
   }
 

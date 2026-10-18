@@ -58,6 +58,7 @@ export const ROUTES = {
     CUSTOMERS: 'admin/customers',
     AGENTS: 'admin/agents',
     ATTENDANCE: 'admin/attendance',
+    MISSED_JOBS: 'admin/missed-jobs',
     SERVICES: 'admin/services',
     SERVICE_CATEGORIES: 'admin/service-categories',
     PRICING: 'admin/pricing',
