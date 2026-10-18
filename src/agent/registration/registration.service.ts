@@ -109,6 +109,7 @@ export class AgentRegistrationService {
     const steps: RegistrationSteps = {
       personalDetails: !!agent.firstName,
       documents: REQUIRED_DOCUMENT_TYPES.every((type) => uploaded.has(type)),
+      profilePhoto: !!agent.profileImage,
       bankDetails: !!bankAccount,
     };
 
