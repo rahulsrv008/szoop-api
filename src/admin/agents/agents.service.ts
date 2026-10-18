@@ -38,6 +38,7 @@ interface AgentListRow {
   approvalStatus: string;
   joiningDate: string | null;
   createdAt: Date;
+  profileImage: string | null;
   documentsVerified: number;
   averageRating: string;
   completedBookings: number;
@@ -109,6 +110,20 @@ export class AdminAgentsService {
       .offset(skip)
       .limit(take);
 
+    if (query.approvalStatus === 'PENDING') {
+      rowsQb.addSelect(
+        `COALESCE(
+          agent.profileImage,
+          (SELECT doc.document_url
+             FROM agent_documents doc
+            WHERE doc.agent_id = agent.id AND doc.document_type = 'PHOTO'
+            ORDER BY doc.created_at DESC
+            LIMIT 1)
+        )`,
+        'profileImage',
+      );
+    }
+
     const countQb = this.applyFilters(
       this.agentRepo
         .createQueryBuilder('agent')
@@ -133,6 +148,7 @@ export class AdminAgentsService {
         mobile: row.mobile,
         status: row.status,
         approvalStatus: row.approvalStatus,
+        profileImage: row.profileImage ?? null,
         documentsVerified: Number(row.documentsVerified),
         averageRating: Number(Number(row.averageRating ?? 0).toFixed(2)),
         completedBookings: Number(row.completedBookings),
@@ -208,7 +224,11 @@ export class AdminAgentsService {
       firstName: agent.firstName,
       lastName: agent.lastName,
       name: this.fullName(agent.firstName, agent.lastName),
-      profileImage: agent.profileImage,
+      profileImage:
+        agent.profileImage ??
+        documents.find((document) => document.documentType === 'PHOTO')
+          ?.documentUrl ??
+        null,
       gender: agent.gender,
       dateOfBirth: agent.dateOfBirth,
       status: agent.status,

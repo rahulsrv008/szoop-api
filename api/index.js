@@ -1,5 +1,10 @@
 'use strict';
 
+require('tsconfig-paths').register({
+  baseUrl: require('path').resolve(__dirname, '..'),
+  paths: { 'src/*': ['dist/*'] },
+});
+
 const { createServer } = require('../dist/main');
 
 let serverPromise = null;
