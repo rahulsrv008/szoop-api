@@ -72,7 +72,7 @@ export class AgentAuthService {
 
   /** Login response doubles as the "where do I resume onboarding" payload. */
   private async toSummary(mobile: string, agent: Agent) {
-    const steps = await this.resolveSteps(agent.id, agent.firstName);
+    const steps = await this.resolveSteps(agent.id, agent.firstName, agent.profileImage);
 
     return {
       agentId: agent.id,
@@ -88,6 +88,7 @@ export class AgentAuthService {
   private async resolveSteps(
     agentId: string,
     firstName: string,
+    profileImage: string | null,
   ): Promise<RegistrationSteps> {
     const [documentTypes, bankAccount] = await Promise.all([
       this.documentRepo.find({
@@ -102,6 +103,7 @@ export class AgentAuthService {
     return {
       personalDetails: !!firstName,
       documents: REQUIRED_DOCUMENT_TYPES.every((type) => uploaded.has(type)),
+      profilePhoto: !!profileImage,
       bankDetails: !!bankAccount,
     };
   }
