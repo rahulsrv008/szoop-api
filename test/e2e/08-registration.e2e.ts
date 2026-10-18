@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Factory, Harness, area, startApp } from './support/harness';
 import * as E from 'src/database/entities';
 import { AgentRegistrationService } from 'src/agent/registration/registration.service';
+import { AgentProfileService } from 'src/agent/profile/profile.service';
 
 describe('Agent registration: where onboarding resumes', () => {
   let h: Harness;
@@ -53,5 +54,15 @@ describe('Agent registration: where onboarding resumes', () => {
     const agent = await pendingWithDocs('approved-no-selfie', 4);
     await h.repo(E.Agent).update({ id: agent.id }, { approvalStatus: 'APPROVED' });
     assert.notEqual((await status(agent.userId)).nextStep, 'profile-photo');
+  });
+
+  it('the profile photo can be changed and removed (Profile screen)', async () => {
+    const agent = await f.agent('photo-owner', { live: area(5), skills: [skill] });
+    const profile = h.get(AgentProfileService);
+    const set = (await profile.update(agent.userId, { profileImage: 'data:image/jpeg;base64,AA==' } as never)) as { profileImage: string | null };
+    assert.equal(set.profileImage, 'data:image/jpeg;base64,AA==');
+    const removed = (await profile.update(agent.userId, { profileImage: null } as never)) as { profileImage: string | null };
+    assert.equal(removed.profileImage, null, 'null removes it, and the response says so');
+    assert.equal((await h.repo(E.Agent).findOneBy({ id: agent.id }))?.profileImage, null);
   });
 });
