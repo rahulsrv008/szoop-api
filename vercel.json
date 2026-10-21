@@ -4,7 +4,7 @@
   "buildCommand": "npm run build",
   "functions": {
     "api/index.js": {
-      "includeFiles": "{dist/**,package.json}",
+      "includeFiles": "{dist/**,src/**,package.json}",
       "maxDuration": 60
     }
   },
