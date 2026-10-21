@@ -1,6 +1,6 @@
 {
   "name": "clearit-be",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "CleanIt API — bookings, OTP auth, payments, and tracking",
   "author": "CleanIt",
   "private": true,
