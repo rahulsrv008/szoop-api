@@ -137,9 +137,9 @@ const RULE_NAMES: Record<string, string> = {
 
 /**
  * The admin panel's booking monitor: every live job, the step it's in, and
- * when that step's clock started. Tracking starts when the job is broadcast
- * to agents (scheduled one-offs go out SCHEDULED_DISPATCH_LEAD_MINUTES before
- * their start); nothing is shown before that. A step turns orange, then red,
+ * when that step's clock started. A paid job with no agent is listed at once
+ * (the 3/5 min clock still starts at the broadcast). Assigned jobs wait until
+ * that step is live. A step turns orange, then red,
  * the given number of minutes after its clock starts (MonitorRules), or
  * straight away when something blocks it — no agent online to take it, or
  * the assigned agent hasn't come online today. Times are absolute so the
@@ -336,9 +336,12 @@ export class AdminBookingMonitorService {
     const running = job.clockStartsAt.getTime() <= ctx.now.getTime();
     const live = job.step === 'ON_THE_WAY' || job.step === 'IN_PROGRESS';
     const recent = slot.getTime() >= addMinutes(ctx.now, -LOOKBACK_HOURS * 60).getTime();
-    // Tracking starts at the broadcast: before that a job isn't on the board. An
-    // unassigned plan stays until someone takes it, however far off its first visit is.
-    const onBoard = live || (running && (recent || (plan && job.step === 'WAITING_FOR_AGENT')));
+    // Paid and still unassigned: on the board at once (the 3/5 min clock still
+    // starts at the broadcast). Assigned jobs wait until their step is live.
+    const onBoard =
+      live ||
+      job.step === 'WAITING_FOR_AGENT' ||
+      (running && recent);
     return { ...job, onBoard };
   }
 
@@ -672,7 +675,7 @@ export class AdminBookingMonitorService {
    * paid / accepted / arriving / ongoing jobs that can matter now: everything
    * on the way or in progress; single jobs dated around today (all of today,
    * so the agents panel knows who has work later); plans with a visit around
-   * today, or still waiting for an agent at all.
+   * today; and any paid job still waiting for an agent, however far off.
    */
   private liveBookings(now: Date, rules: MonitorRules) {
     const from = toDateString(addMinutes(now, -LOOKBACK_HOURS * 60));
@@ -694,7 +697,7 @@ export class AdminBookingMonitorService {
           live
             .where("booking.status IN ('arriving', 'ongoing')")
             .orWhere('booking.bookingDate BETWEEN :from AND :to', { from, to })
-            .orWhere("(booking.status = 'paid' AND booking.agentId IS NULL AND booking.planType = 'MONTHLY')")
+            .orWhere('booking.status = \'paid\' AND booking.agentId IS NULL')
             .orWhere(
               `EXISTS (
                  SELECT 1 FROM booking_visits visit

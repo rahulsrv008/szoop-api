@@ -131,14 +131,17 @@ describe('Booking monitor', () => {
       const lateTick = await job({ zoneId: zone.id, minutesFromNow: lead - 4 });
       await enteredAt(lateTick.id, 'paid', 120);
       await broadcast(lateTick.id, helper.id, 1, 120);
-      // Not due to go out for another 55 minutes: nothing to track yet.
+      // Listed at once, but the 3/5 min clock waits for the broadcast.
       const notYet = await job({ zoneId: zone.id, minutesFromNow: lead + 55 });
       await enteredAt(notYet.id, 'paid', 120);
 
       const view = await jobOf(lateTick.id);
       assert.equal(view?.running, true);
       assert.equal(view?.severity, 'ok');
-      assert.equal(await jobOf(notYet.id), undefined);
+      const upcoming = await jobOf(notYet.id);
+      assert.equal(upcoming?.step, 'WAITING_FOR_AGENT');
+      assert.equal(upcoming?.running, false);
+      assert.equal(upcoming?.severity, 'ok');
     });
 
     it('is red when it was due to go out and never did', async () => {
