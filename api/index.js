@@ -1,11 +1,21 @@
 'use strict';
 
+const path = require('path');
+const fs = require('fs');
+
 require('tsconfig-paths').register({
-  baseUrl: require('path').resolve(__dirname, '..'),
+  baseUrl: path.resolve(__dirname, '..'),
   paths: { 'src/*': ['dist/*'] },
 });
 
-const { createServer } = require('../dist/main');
+const distMain = path.join(__dirname, '..', 'dist', 'main.js');
+if (!fs.existsSync(distMain)) {
+  throw new Error(
+    `Cannot find ${distMain}. Vercel must run "npm run build" and include dist/** in the function.`,
+  );
+}
+
+const { createServer } = require(distMain);
 
 let serverPromise = null;
 
