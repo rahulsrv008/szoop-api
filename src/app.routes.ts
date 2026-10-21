@@ -63,6 +63,7 @@ export const ROUTES = {
     SERVICE_CATEGORIES: 'admin/service-categories',
     PRICING: 'admin/pricing',
     BOOKINGS: 'admin/bookings',
+    BOOKING_MONITOR: 'admin/booking-monitor',
     PAYMENTS: 'admin/payments',
     EARNINGS: 'admin/earnings',
     COUPONS: 'admin/coupons',

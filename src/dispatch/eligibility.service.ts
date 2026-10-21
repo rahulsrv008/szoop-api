@@ -5,9 +5,9 @@ import { AgentAvailability, Booking, BookingVisit } from 'src/database/entities'
 import { toDateString, todayString } from 'src/agent/shared/date.util';
 import {
   COMMITTED_STATUSES,
-  LATE_JOB_WINDOW_MINUTES,
   PLAN_FIT_DAYS,
   TRAVEL_BUFFER_MINUTES,
+  lateWindowMinutes,
   slotMinutes,
   toMinutes,
 } from './dispatch.rules';
@@ -110,20 +110,17 @@ export class EligibilityService {
 
   /**
    * When each booking is next due (server-local): its earliest not-done visit
-   * for plans, else its own start. Slots more than `lateWindowMinutes` in the
-   * past don't count, so a booking missing from the map is no longer worth
-   * pushing to anyone. Pass null to keep past slots.
+   * for plans, else its own start. Slots further in the past than the late
+   * window (by default each booking's own, see lateWindowMinutes) don't count,
+   * so a booking missing from the map is no longer worth pushing to anyone.
+   * Pass null to keep past slots.
    */
-  async nextStarts(
-    bookings: Booking[],
-    now = new Date(),
-    lateWindowMinutes: number | null = LATE_JOB_WINDOW_MINUTES,
-  ) {
+  async nextStarts(bookings: Booking[], now = new Date(), lateWindow?: number | null) {
     const slots = await this.slotsOf(bookings);
-    const cutoff =
-      lateWindowMinutes === null ? -Infinity : now.getTime() - lateWindowMinutes * 60_000;
     const starts = new Map<string, Date>();
     for (const booking of bookings) {
+      const window = lateWindow === undefined ? lateWindowMinutes(booking) : lateWindow;
+      const cutoff = window === null ? -Infinity : now.getTime() - window * 60_000;
       const upcoming = (slots.get(booking.id) ?? [])
         .map((slot) => {
           const at = new Date(`${slot.date}T00:00:00`);

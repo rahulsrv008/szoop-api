@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && tsc-alias -p tsconfig.build.json",
     "format": "prettier --write \"src/**/*.ts\"",
     "start": "nest start",
     "start:dev": "ts-node-dev --respawn --transpile-only -r tsconfig-paths/register src/main.ts",
@@ -63,6 +63,7 @@
     "prettier": "^3.8.3",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
+    "tsc-alias": "^1.9.8",
     "typescript": "^5.8.3"
   },
   "engines": {

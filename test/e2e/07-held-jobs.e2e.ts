@@ -142,7 +142,7 @@ describe('Held jobs: reminders and no-shows', () => {
     assert.equal((await tickets(booking.id))[0]?.subject, `Missed job · ${booking.bookingNumber}`);
   });
 
-  it('"Right now": no hour-before reminder, a nudge 5 minutes after accepting, then refunded at 15', async () => {
+  it('"Right now": no hour-before reminder, a nudge 5 minutes after accepting, taken back at 15, refunded an hour after its start', async () => {
     // Booked ~18 minutes ago for a slot 3 minutes ago, accepted 4 minutes after booking.
     const nudged = await held(10, 'instant-nudged', 10, { acceptedMinutesAgo: 6 });
     await h.repo(E.Booking).update({ id: nudged.booking.id }, { bookingMode: 'INSTANT' });
@@ -154,9 +154,17 @@ describe('Held jobs: reminders and no-shows', () => {
     assert.equal(await agentNotices(nudged.agent.userId, `Tap "I'm on my way" now`), 1);
     assert.equal((await reload(h, nudged.booking.id)).agentId, nudged.agent.id);
 
-    // Its slot has passed, so there's nobody to hand it to: it expires and the customer is refunded.
-    assert.equal((await reload(h, late.booking.id)).status, 'expired');
+    // Taken off the agent and back out to everyone else, though its slot has passed:
+    // a "Right now" job is still offered until an hour after its start.
+    assert.equal((await reload(h, late.booking.id)).status, 'paid');
     assert.ok(await h.repo(E.Notification).findOneBy({ userId: late.agent.userId, title: 'Job removed' }));
+
+    // Nobody takes it by then: it expires (and whatever was paid goes back to the customer).
+    const gone = at(-61);
+    await h.repo(E.Booking).update({ id: late.booking.id }, { bookingDate: gone.date, startTime: gone.time });
+    await h.ds.query(`UPDATE booking_dispatches SET next_action_at = now() WHERE booking_id = $1`, [late.booking.id]);
+    await dispatch.tick();
+    assert.equal((await reload(h, late.booking.id)).status, 'expired');
   });
 
   describe('"Right now": is the agent actually moving?', () => {

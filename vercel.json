@@ -1,7 +1,9 @@
 {
-  "installCommand": "npm install --include=dev",
-  "buildCommand": "npm run build",
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/api?__path=/$1" }
+  "version": 2,
+  "builds": [
+    { "src": "api/index.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "/api/index.js" }
   ]
 }

@@ -263,8 +263,27 @@ describe('Push dispatch', () => {
         `UPDATE booking_dispatches SET created_at = now() - make_interval(mins => $2), next_action_at = now() WHERE booking_id = $1`,
         [bookingId, minutes],
       );
+    /** Moves the job's start to `minutes` ago and makes it due now. */
+    const startedAgo = async (bookingId: string, minutes: number) => {
+      const start = at(-minutes);
+      await h.repo(E.Booking).update({ id: bookingId }, { bookingDate: start.date, startTime: start.time });
+      await h.ds.query(`UPDATE booking_dispatches SET next_action_at = now() WHERE booking_id = $1`, [bookingId]);
+    };
 
-    it('expires when nobody accepts within 10 minutes, refunds to the wallet, and tells the customer', async () => {
+    it('keeps looking past 10 minutes and past its start, until an hour after its start', async () => {
+      const base = area(29);
+      await f.agent('patient', { live: north(base, 1), skills: [skill] });
+      const booking = await instantJob(base);
+      await dispatch.kick(booking.id);
+      await searchedFor(booking.id, 25);
+      await startedAgo(booking.id, 50);
+      await lapseOffers(h, booking.id);
+      await dispatch.tick();
+      assert.equal((await reload(h, booking.id)).status, 'paid');
+      assert.notEqual((await dispatchState(h, booking.id))?.status, 'closed');
+    });
+
+    it('expires when nobody accepts within an hour of its start, refunds to the wallet, and tells the customer', async () => {
       const base = area(20);
       await f.agent('n1', { live: north(base, 1), skills: [skill] });
       const booking = await instantJob(base);
@@ -274,7 +293,7 @@ describe('Push dispatch', () => {
       const noticesBefore = await h.repo(E.Notification).count({
         where: { userId: customerUser.id, notificationType: 'booking_expired' },
       });
-      await searchedFor(booking.id, 11);
+      await startedAgo(booking.id, 61);
       await dispatch.tick();
 
       const after = await reload(h, booking.id);
@@ -288,18 +307,26 @@ describe('Push dispatch', () => {
       assert.equal(Number(credit.amount), 300);
       assert.deepEqual(await offersOf(h, f, booking.id), ['n1:1:cancelled']);
       assert.equal((await dispatchState(h, booking.id))?.status, 'closed');
-      const noticesAfter = await h.repo(E.Notification).count({
+      const noticesAfter = await h.repo(E.Notification).find({
         where: { userId: customerUser.id, notificationType: 'booking_expired' },
       });
-      assert.equal(noticesAfter - noticesBefore, 1);
+      assert.equal(noticesAfter.length - noticesBefore, 1);
+      const notice = noticesAfter.at(-1);
+      assert.equal(notice?.title, 'No expert found within 60 minutes');
+      assert.match(notice?.message ?? '', /within 60 minutes of the start time/);
+      const expiredRow = await h.repo(E.BookingStatusHistory).findOne({
+        where: { bookingId: booking.id, status: 'expired' },
+        order: { createdAt: 'DESC' },
+      });
+      assert.equal(expiredRow?.remarks, 'No agent found within 60 minutes of the start time');
       const n1 = await h.repo(E.Agent).findOneByOrFail({ firstName: 'n1' });
       await rejectsWith(agentBookings.accept(n1.userId, booking.id), 409);
     });
 
-    it('when every wave runs dry, looks again when its 10 minutes are up, not in 10 more', async () => {
+    it('when every wave runs dry, looks again when its search ends, not in 10 more', async () => {
       const booking = await instantJob(area(21));
       await dispatch.kick(booking.id);
-      await searchedFor(booking.id, 8);
+      await startedAgo(booking.id, 58);
       await dispatch.tick();
       const state = await dispatchState(h, booking.id);
       assert.equal(state?.status, 'exhausted');
@@ -307,7 +334,7 @@ describe('Push dispatch', () => {
       assert.ok(minutes > 1 && minutes <= 2, `${minutes}`);
     });
 
-    it('a job taken back from its agent gets a fresh 10 minutes, and the customer hears it once', async () => {
+    it('a job taken back from its agent goes straight back out, and the customer hears it once', async () => {
       const base = area(23);
       const a = await f.agent('r-held', { live: north(base, 1), skills: [skill] });
       const booking = await instantJob(base);
@@ -328,7 +355,7 @@ describe('Push dispatch', () => {
     it('a cancel racing the expiry settles once: one status, one wallet credit', async () => {
       const booking = await instantJob(area(24));
       await dispatch.kick(booking.id);
-      await searchedFor(booking.id, 11);
+      await startedAgo(booking.id, 61);
       await Promise.allSettled([
         dispatch.tick(),
         customerBookings.cancel(customerUser.id, booking.id, {} as never),
@@ -362,7 +389,7 @@ describe('Push dispatch', () => {
     it('without a timer, the customer polling their bookings is enough to expire it (once per window)', async () => {
       const booking = await instantJob(area(26));
       await dispatch.kick(booking.id);
-      await searchedFor(booking.id, 11);
+      await startedAgo(booking.id, 61);
       await h.ds.query(`UPDATE dispatch_clock SET next_tick_at = now() WHERE id = 1`);
       process.env.DISPATCH_REQUEST_TICK_SECONDS = '20';
       try {
@@ -387,12 +414,11 @@ describe('Push dispatch', () => {
         id: string;
         expiresAt: string | null;
       }>;
-      const [dispatchRow] = await h.ds.query(`SELECT created_at FROM booking_dispatches WHERE booking_id = $1`, [instant.id]);
-      const searchEnd = new Date(dispatchRow.created_at).getTime() + 10 * 60_000;
-      // "Right now": the 10-minute search ends before its start (~15 min away).
+      // "Right now": open until an hour after its start (~15 min away).
+      const searchEnd = new Date(`${instant.bookingDate}T${instant.startTime}`).getTime() + 60 * 60_000;
       const instantItem = items.find((item) => item.id === instant.id);
       assert.ok(instantItem?.expiresAt, 'instant job has an expiry');
-      assert.ok(Math.abs(Date.parse(instantItem!.expiresAt!) - searchEnd) < 2000, instantItem!.expiresAt!);
+      assert.equal(Date.parse(instantItem!.expiresAt!), searchEnd);
       // Scheduled: open until its start.
       const scheduledItem = items.find((item) => item.id === scheduled.id);
       assert.equal(

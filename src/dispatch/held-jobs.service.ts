@@ -77,7 +77,8 @@ const minutes = (n: number) => n * 60_000;
  * - a reminder an hour before the slot, and a last nudge 10 minutes before the cut-off;
  * - no "I'm on my way" 15 minutes before the slot (or 15 minutes after a late accept):
  *   the job goes back to dispatch, which counts against the agent's release limit;
- *   if nobody takes it by the slot, it closes and the customer is refunded to their wallet;
+ *   if nobody takes it by the slot (a "Right now" job: an hour after it), it closes and
+ *   the customer is refunded to their wallet;
  * - "Right now" jobs, 10 minutes after setting off: no closer to the customer, so back to
  *   dispatch with a new start 15 minutes ahead; no location coming in at all (no internet,
  *   or the app is behind Google Maps), so the agent is asked, but nothing is taken away;
@@ -390,6 +391,8 @@ export class HeldJobsService {
   /**
    * A job released for a no-show that nobody took before its slot: dispatch has
    * stopped looking, so close it and refund the customer to their wallet.
+   * "Right now" jobs are left to dispatch, which keeps offering them until
+   * INSTANT_LATE_WINDOW_MINUTES after their start and then expires them.
    */
   private async closeUnclaimed(actions: HeldJobActions, now: Date) {
     const rows: { booking_id: string; agent_id: string; slot: Date }[] = await this.bookingRepo.query(
@@ -400,6 +403,7 @@ export class HeldJobsService {
           AND a.slot <= $1
           AND b.status = 'paid'
           AND b.agent_id IS NULL
+          AND b.booking_mode <> 'INSTANT'
           AND NOT EXISTS (
             SELECT 1 FROM booking_job_alerts c WHERE c.booking_id = a.booking_id AND c.kind = 'closed'
           )`,
