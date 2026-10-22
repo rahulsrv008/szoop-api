@@ -9,6 +9,7 @@ import { AdminMissedJobsModule } from './missed-jobs/missed-jobs.module';
 import { AdminServicesModule } from './services/services.module';
 import { AdminPricingModule } from './pricing/pricing.module';
 import { AdminBookingsModule } from './bookings/bookings.module';
+import { AdminBookingMonitorModule } from './booking-monitor/booking-monitor.module';
 import { AdminPaymentsModule } from './payments/payments.module';
 import { AdminEarningsModule } from './earnings/earnings.module';
 import { AdminCouponsModule } from './coupons/coupons.module';
@@ -34,6 +35,7 @@ import { AdminHomeContentModule } from './home-content/home-content.module';
     AdminServicesModule,
     AdminPricingModule,
     AdminBookingsModule,
+    AdminBookingMonitorModule,
     AdminPaymentsModule,
     AdminEarningsModule,
     AdminCouponsModule,

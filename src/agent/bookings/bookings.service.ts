@@ -39,6 +39,8 @@ import {
   agentOrigin,
   distanceKm,
   hasSkillFor,
+  instantSearchEndsAt,
+  isDispatchReady,
   serviceNames,
 } from 'src/dispatch/dispatch.rules';
 import { AgentContextService } from '../shared/agent-context.service';
@@ -201,6 +203,7 @@ export class AgentBookingsService {
     const zoneSet = new Set(zones);
     const due = await this.eligibility.nextStarts(rows);
     const matched = rows.filter((booking) => {
+      if (!isDispatchReady(booking)) return false;
       if (!due.has(booking.id)) return false;
       if (offers.has(booking.id)) return true;
       if (!hasSkillFor(booking, match.keywords)) return false;
@@ -220,20 +223,16 @@ export class AgentBookingsService {
       page,
     );
     // When each job stops being open, so the app can drop it without refetching:
-    // its start, or sooner for a "Right now" job whose 10-minute search ends first.
+    // its start, or for a "Right now" job INSTANT_LATE_WINDOW_MINUTES after it.
     // Multi-visit plans stay listed for their next visit, so they get none.
-    const searchEnds = await this.dispatch.searchEndsAt(
-      page.filter((booking) => booking.bookingMode === 'INSTANT').map((booking) => booking.id),
+    const instantById = new Map(
+      page.filter((booking) => booking.bookingMode === 'INSTANT').map((booking) => [booking.id, booking]),
     );
     const withOffers = this.withDistanceKm(origin, items, page).map((item) => {
       const start = due.get(item.id);
-      const searchEnd = searchEnds.get(item.id);
+      const instant = instantById.get(item.id);
       const expiresAt =
-        item.visitsTotal > 1 || !start
-          ? null
-          : searchEnd && searchEnd < start
-            ? searchEnd
-            : start;
+        item.visitsTotal > 1 || !start ? null : instant ? instantSearchEndsAt(instant) : start;
       return {
         ...item,
         offerExpiresAt: offers.get(item.id)?.toISOString() ?? null,

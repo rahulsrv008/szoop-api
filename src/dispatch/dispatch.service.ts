@@ -31,15 +31,19 @@ import { BOOKING_MODE_SQL, DISPATCH_SCHEMA_SQL } from './dispatch.schema';
 import {
   DISPATCH_WAVES,
   EXHAUSTED_RETRY_MINUTES,
-  INSTANT_SEARCH_MINUTES,
+  INSTANT_LATE_WINDOW_MINUTES,
   NEAR_TERM_MINUTES,
   OFFER_TTL_SECONDS,
   RELEASABLE_STATUSES,
   agentBase,
   canReachInTime,
+  bookingStartAt,
   distanceKm,
   hasSkillFor,
+  instantSearchEndsAt,
+  isDispatchReady,
   minutesUntil,
+  scheduledDispatchLeadMinutes,
   serviceNames,
   servesZone,
 } from './dispatch.rules';
@@ -69,8 +73,8 @@ type Candidate = { agent: Agent; distanceKm: number | null; live: boolean };
  * once (DISPATCH_WAVES). Each offer lives OFFER_TTL_SECONDS. First accept wins
  * (the conditional claim in AgentBookingsService.accept). If every wave runs
  * dry the job stays in the open pool and is re-checked every few minutes.
- * A "Right now" job still open INSTANT_SEARCH_MINUTES after dispatch started
- * expires instead, and the customer is told to try again.
+ * A "Right now" job still open INSTANT_LATE_WINDOW_MINUTES after its start
+ * time expires instead: the customer is refunded and told to try again.
  *
  * All state is in booking_dispatches / booking_offers, so any instance — the
  * in-process timer, the cron endpoint, or a kick from a request — can drive it.
@@ -167,6 +171,17 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
         .select('booking.id', 'id')
         .where("booking.status = 'paid'")
         .andWhere('booking.agentId IS NULL')
+        .andWhere(
+          new Brackets((ready) =>
+            ready
+              .where("booking.bookingMode = 'INSTANT'")
+              .orWhere("booking.planType = 'MONTHLY'")
+              .orWhere(
+                'booking.bookingDate + booking.startTime <= now() + make_interval(mins => :leadMinutes)',
+                { leadMinutes: scheduledDispatchLeadMinutes() },
+              ),
+          ),
+        )
         .andWhere(
           new Brackets((due) =>
             due
@@ -326,7 +341,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     await this.history.record(bookingId, 'paid', null, `Released from agent: ${reason}`);
     await this.excludeAgent(bookingId, agentId, 'released');
 
-    // Back in the pool: a "Right now" job gets a fresh INSTANT_SEARCH_MINUTES to find someone.
+    // Back in the pool: dispatch starts over from now (the admin monitor times the new broadcast from here).
     await this.dispatchRepo
       .createQueryBuilder()
       .update()
@@ -378,24 +393,6 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
         respondedAt: MoreThan(new Date(Date.now() - days * 24 * 3600_000)),
       },
     });
-  }
-
-  /**
-   * When each "Right now" booking's search runs out (dispatch start +
-   * INSTANT_SEARCH_MINUTES), so the agent app can drop it from the list then.
-   */
-  async searchEndsAt(bookingIds: string[]) {
-    if (!bookingIds.length) return new Map<string, Date>();
-    const rows = await this.dispatchRepo.find({
-      where: { bookingId: In(bookingIds) },
-      select: ['bookingId', 'createdAt'],
-    });
-    return new Map(
-      rows.map((row) => [
-        row.bookingId,
-        new Date(row.createdAt.getTime() + INSTANT_SEARCH_MINUTES * 60_000),
-      ]),
-    );
   }
 
   /** Live offers for this agent, by booking id → expiry. */
@@ -524,11 +521,20 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
       await this.settle(bookingId, booking);
       return;
     }
+    if (!isDispatchReady(booking, now)) {
+      await this.dispatchRepo.update(
+        { bookingId },
+        {
+          status: 'searching',
+          nextActionAt: new Date(
+            bookingStartAt(booking).getTime() - scheduledDispatchLeadMinutes() * 60_000,
+          ),
+        },
+      );
+      return;
+    }
     const nextStart = (await this.eligibility.nextStarts([booking], now)).get(bookingId);
-    const searchEndsAt =
-      booking.bookingMode === 'INSTANT'
-        ? new Date(new Date(state.created_at).getTime() + INSTANT_SEARCH_MINUTES * 60_000)
-        : null;
+    const searchEndsAt = booking.bookingMode === 'INSTANT' ? instantSearchEndsAt(booking) : null;
     if (searchEndsAt && (!nextStart || now >= searchEndsAt)) {
       await this.expire(booking);
       return;
@@ -728,7 +734,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     // One transaction with the booking row locked, so an accept racing this tick wins.
     const closed = await this.closure.close(booking.id, 'expired', {
       reason: 'BOOKING_EXPIRED',
-      remarks: `No agent accepted within ${INSTANT_SEARCH_MINUTES} minutes`,
+      remarks: `No agent found within ${INSTANT_LATE_WINDOW_MINUTES} minutes of the start time`,
       onlyIf: (locked) => locked.status === 'paid' && !locked.agentId,
     });
     if (!closed) {
@@ -746,8 +752,8 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     await this.notifications
       .toUser(withCustomer.customer.userId, {
         app: 'customer',
-        title: 'No expert available right now',
-        message: `Sorry, no expert is available at the moment for booking ${booking.bookingNumber}.${
+        title: 'No expert found within 60 minutes',
+        message: `Sorry, no expert was found within ${INSTANT_LATE_WINDOW_MINUTES} minutes of the start time for booking ${booking.bookingNumber}.${
           refundedToWallet > 0 ? ` ₹${refundedToWallet} has been added to your wallet.` : ''
         }${couponNote(releasedCoupons)} Please try again in a little while.`,
         type: 'booking_expired',

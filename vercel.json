@@ -1,6 +1,13 @@
 {
-  "installCommand": "npm install --include=dev",
+  "version": 2,
+  "installCommand": "npm install",
   "buildCommand": "npm run build",
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "{dist/**,src/**,package.json}",
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
     { "source": "/(.*)", "destination": "/api?__path=/$1" }
   ]

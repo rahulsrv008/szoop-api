@@ -1,12 +1,13 @@
 {
   "name": "clearit-be",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "CleanIt API — bookings, OTP auth, payments, and tracking",
   "author": "CleanIt",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && tsc-alias -p tsconfig.build.json",
+    "vercel-build": "npm run build",
     "format": "prettier --write \"src/**/*.ts\"",
     "start": "nest start",
     "start:dev": "ts-node-dev --respawn --transpile-only -r tsconfig-paths/register src/main.ts",
@@ -25,6 +26,7 @@
     "@nestjs/core": "^11.0.21",
     "@nestjs/platform-express": "^11.0.21",
     "@nestjs/swagger": "^11.4.1",
+    "@nestjs/cli": "^11.0.21",
     "@nestjs/throttler": "^6.7.1",
     "@nestjs/typeorm": "^11.0.1",
     "@vercel/functions": "^3.9.11",
@@ -44,14 +46,15 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "swagger-ui-express": "^5.0.1",
+    "tsc-alias": "^1.9.8",
     "tsconfig-paths": "^4.2.0",
     "typeorm": "^0.3.24",
+    "typescript": "^5.8.3",
     "uuid": "^14.0.0",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
-    "@nestjs/cli": "^11.0.21",
     "@nestjs/schematics": "^11.1.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/compression": "^1.8.1",
@@ -62,8 +65,7 @@
     "@types/pg": "^8.15.2",
     "prettier": "^3.8.3",
     "ts-node": "^10.9.2",
-    "ts-node-dev": "^2.0.0",
-    "typescript": "^5.8.3"
+    "ts-node-dev": "^2.0.0"
   },
   "engines": {
     "node": ">=20"

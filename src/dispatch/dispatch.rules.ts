@@ -19,7 +19,10 @@ export const COMMITTED_STATUSES: Booking['status'][] = ['paid', 'accepted', 'arr
 /** Statuses an agent can be pulled off (released or no-show) before work starts. */
 export const RELEASABLE_STATUSES: Booking['status'][] = ['accepted', 'arriving'];
 
-/** An open job expires at its start: after that it's no longer listed, dispatched or accepted. */
+/**
+ * A scheduled open job expires at its start: after that it's no longer
+ * listed, dispatched or accepted. "Right now" jobs get INSTANT_LATE_WINDOW_MINUTES.
+ */
 export const LATE_JOB_WINDOW_MINUTES = 0;
 
 /**
@@ -60,8 +63,48 @@ export const OFFER_TTL_SECONDS = 90;
 /** Once every wave ran dry, how often to look again for agents who came online since. */
 export const EXHAUSTED_RETRY_MINUTES = 10;
 
-/** A "Right now" job nobody accepts within this long of dispatch starting expires, and the customer is told. */
-export const INSTANT_SEARCH_MINUTES = 10;
+/**
+ * A "Right now" job stays open this long after its start time (still listed,
+ * offered and acceptable). Nobody accepts by then: it expires, the customer
+ * is refunded to their wallet and told.
+ */
+export const INSTANT_LATE_WINDOW_MINUTES = 60;
+
+/** How long past its start a job is still offered. */
+export function lateWindowMinutes(booking: Pick<Booking, 'bookingMode'>) {
+  return booking.bookingMode === 'INSTANT' ? INSTANT_LATE_WINDOW_MINUTES : LATE_JOB_WINDOW_MINUTES;
+}
+
+/** When a "Right now" job stops being offered, and expires if nobody has taken it. */
+export function instantSearchEndsAt(booking: Pick<Booking, 'bookingDate' | 'startTime'>) {
+  return new Date(bookingStartAt(booking).getTime() + INSTANT_LATE_WINDOW_MINUTES * 60_000);
+}
+
+/** How early a scheduled one-off job becomes visible to agents. */
+export const DEFAULT_SCHEDULED_DISPATCH_LEAD_MINUTES = 45;
+
+export function scheduledDispatchLeadMinutes() {
+  const raw = process.env.SCHEDULED_DISPATCH_LEAD_MINUTES;
+  if (raw === undefined || raw === '') return DEFAULT_SCHEDULED_DISPATCH_LEAD_MINUTES;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_SCHEDULED_DISPATCH_LEAD_MINUTES;
+}
+
+/** The local server time at which a booking may enter the agent broadcast pool. */
+export function bookingStartAt(booking: Pick<Booking, 'bookingDate' | 'startTime'>) {
+  return new Date(`${String(booking.bookingDate).slice(0, 10)}T${booking.startTime}`);
+}
+
+/** Quick and monthly jobs keep their existing behavior; only scheduled one-offs wait. */
+export function isDispatchReady(
+  booking: Pick<Booking, 'bookingMode' | 'planType' | 'bookingDate' | 'startTime'>,
+  now = new Date(),
+) {
+  if (booking.bookingMode !== 'SCHEDULED' || booking.planType === 'MONTHLY') return true;
+  return bookingStartAt(booking).getTime() <= now.getTime() + scheduledDispatchLeadMinutes() * 60_000;
+}
 
 export type GeoPoint = { lat: number; lng: number };
 

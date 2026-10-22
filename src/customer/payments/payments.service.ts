@@ -184,13 +184,23 @@ export class CustomerPaymentsService {
     }
 
     const event = typeof body.event === 'string' ? body.event : null;
-    if (event !== 'payment.captured' && event !== 'payment.failed') {
+    if (
+      event !== 'payment.captured' &&
+      event !== 'payment.failed' &&
+      event !== 'order.paid'
+    ) {
       return { received: true };
     }
 
-    const entity = asRecord(asRecord(asRecord(body.payload)?.payment)?.entity);
+    const payload = asRecord(body.payload);
+    const paymentEntity = asRecord(asRecord(payload?.payment)?.entity);
+    const orderEntity = asRecord(asRecord(payload?.order)?.entity);
     const orderId =
-      typeof entity?.order_id === 'string' ? entity.order_id : null;
+      typeof paymentEntity?.order_id === 'string'
+        ? paymentEntity.order_id
+        : typeof orderEntity?.id === 'string'
+          ? orderEntity.id
+          : null;
     if (!orderId) return { received: true };
 
     const transaction = await this.transactionRepo.findOne({
@@ -210,6 +220,16 @@ export class CustomerPaymentsService {
     const booking = payment.booking ?? null;
 
     if (event === 'payment.failed') {
+      const alreadyRecorded = await this.transactionRepo.findOne({
+        where: {
+          paymentId: payment.id,
+          gatewayName: GATEWAY,
+          gatewayTransactionId: orderId,
+          status: 'failed',
+        },
+      });
+      if (alreadyRecorded) return { received: true };
+
       await this.transactionRepo.save(
         this.transactionRepo.create({
           paymentId: payment.id,
@@ -231,7 +251,17 @@ export class CustomerPaymentsService {
     }
 
     const gatewayPaymentId =
-      typeof entity?.id === 'string' ? entity.id : orderId;
+      typeof paymentEntity?.id === 'string' ? paymentEntity.id : orderId;
+    const alreadyCaptured = await this.transactionRepo.findOne({
+      where: {
+        paymentId: payment.id,
+        gatewayName: GATEWAY,
+        gatewayTransactionId: gatewayPaymentId,
+        status: 'captured',
+      },
+    });
+    if (alreadyCaptured) return { received: true };
+
     await this.capture(payment.bookingId, payment.id, gatewayPaymentId, body, null, 'Payment captured (webhook)');
     return { received: true };
   }

@@ -1,3 +1,4 @@
+import './register-src-alias';
 import './config/timezone';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
@@ -10,7 +11,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import fs from 'fs';
 import path from 'path';
-import { IncomingMessage } from 'http';
+import { IncomingMessage, ServerResponse } from 'http';
 import { json, urlencoded } from 'express';
 import { cwd } from 'process';
 import { AppModule } from './app.module';
@@ -234,4 +235,29 @@ function trustProxySetting(raw?: string): boolean | number | string {
 
 if (!process.env.VERCEL) {
   void createServer(true);
+}
+
+/** Vercel rewrite sends the real path as ?__path= so Nest still sees /health and /api/v1/... */
+function restoreVercelUrl(req: IncomingMessage) {
+  const raw = req.url || '/';
+  const qIndex = raw.indexOf('?');
+  if (qIndex === -1) return;
+  const params = new URLSearchParams(raw.slice(qIndex + 1));
+  const nested = params.get('__path');
+  if (!nested) return;
+  params.delete('__path');
+  const qs = params.toString();
+  req.url = qs ? `${nested}?${qs}` : nested;
+}
+
+let vercelServer: Promise<(req: IncomingMessage, res: ServerResponse) => unknown> | null = null;
+
+/** Default export so Vercel can use src/main.js or dist/main.js as the function entry. */
+export default async function handler(req: IncomingMessage, res: ServerResponse) {
+  restoreVercelUrl(req);
+  if (!vercelServer) {
+    vercelServer = createServer(false) as Promise<(req: IncomingMessage, res: ServerResponse) => unknown>;
+  }
+  const server = await vercelServer;
+  return server(req, res);
 }
