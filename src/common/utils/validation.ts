@@ -12,3 +12,9 @@ export const MEDIA_REF_REGEX = /^(https?:\/\/|data:image\/|file:\/\/)/i;
 
 export const MEDIA_REF_MESSAGE =
   'must be a photo from camera/gallery or an http(s) image URL';
+
+/** KYC documents can also be a PDF (the app sends Aadhaar front and back as one). */
+export const DOCUMENT_REF_REGEX = /^(https?:\/\/|data:image\/|data:application\/pdf|file:\/\/)/i;
+
+export const DOCUMENT_REF_MESSAGE =
+  'must be a photo or PDF from the app, or an http(s) URL';

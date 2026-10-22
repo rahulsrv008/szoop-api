@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
-import { MEDIA_REF_MESSAGE, MEDIA_REF_REGEX } from 'src/common/utils/validation';
+import { DOCUMENT_REF_MESSAGE, DOCUMENT_REF_REGEX } from 'src/common/utils/validation';
 
 /** Document kinds the KYC screen can submit. */
 export const AGENT_DOCUMENT_TYPES = [
@@ -24,9 +24,9 @@ export class UploadAgentDocumentDto {
   documentNumber?: string;
 
   @ApiProperty({
-    description: 'Photo from camera/gallery (data URL) or a hosted image URL',
+    description: 'Photo or PDF from the app (data URL) or a hosted URL',
   })
   @IsString()
-  @Matches(MEDIA_REF_REGEX, { message: MEDIA_REF_MESSAGE })
+  @Matches(DOCUMENT_REF_REGEX, { message: DOCUMENT_REF_MESSAGE })
   documentUrl: string;
 }
