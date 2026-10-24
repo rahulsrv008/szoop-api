@@ -7,7 +7,7 @@ import {
 import { Observable, from } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { AuthUser } from '../types/auth.types';
-import { AdminAccessService, adminAccessStore } from './admin-access';
+import { AdminAccessService, adminAccessStore } from 'src/common/auth/admin-access';
 
 @Injectable()
 export class AdminAccessInterceptor implements NestInterceptor {

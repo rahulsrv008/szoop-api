@@ -118,6 +118,79 @@ export class CustomerPaymentsService {
     };
   }
 
+  async payWithWallet(userId: string, bookingId: string) {
+    const customerId = await this.identity.requireCustomerId(userId);
+    const booking = await this.findOwnBooking(customerId, bookingId);
+
+    if (CLOSED.includes(booking.status)) {
+      throw new BadRequestException('This booking is closed. Please book again.');
+    }
+    if (booking.bookingMode === 'INSTANT' && booking.status === 'finding' && slotStart(booking) <= Date.now()) {
+      throw new BadRequestException('This "Right now" slot has passed. Please book again.');
+    }
+    if (
+      booking.status === 'finding' &&
+      Date.now() - booking.createdAt.getTime() > PAYMENT_WINDOW_MINUTES * 60_000
+    ) {
+      throw new BadRequestException('This booking request has timed out. Please book again.');
+    }
+    const payment = await this.ensurePayment(booking, customerId);
+    if (
+      booking.paymentStatus === 'PAID' ||
+      payment.paymentStatus === 'PAID'
+    ) {
+      return {
+        bookingId: booking.id,
+        bookingNumber: booking.bookingNumber,
+        status: booking.status,
+        paymentStatus: 'PAID' as const,
+        totalAmount: Number(booking.totalAmount),
+        paymentId: payment.id,
+        transactionId: paymentTransactionId(payment) ?? `wallet_${booking.id}`,
+        paidAt: payment.paidAt,
+        refundedToWallet: 0,
+      };
+    }
+
+    const payableAmount = Number(booking.totalAmount);
+    const walletBalance = await this.wallet.balance(customerId);
+    if (walletBalance < payableAmount) {
+      throw new BadRequestException(
+        `Insufficient wallet balance. You have ₹${walletBalance}, but ₹${payableAmount} is required.`,
+      );
+    }
+
+    // Debit the wallet
+    await this.wallet.debitBooking(booking);
+
+    const transactionId = `wallet_${Date.now()}`;
+    const captured = await this.capture(
+      booking.id,
+      payment.id,
+      transactionId,
+      {
+        method: 'WALLET',
+        amount: payableAmount,
+        paidAt: new Date().toISOString(),
+      },
+      userId,
+      'Paid via Wallet',
+      'WALLET',
+    );
+
+    return {
+      bookingId: booking.id,
+      bookingNumber: booking.bookingNumber,
+      status: captured.booking.status,
+      paymentStatus: captured.booking.paymentStatus,
+      totalAmount: Number(booking.totalAmount),
+      paymentId: payment.id,
+      transactionId,
+      paidAt: captured.payment.paidAt,
+      refundedToWallet: captured.refundedToWallet,
+    };
+  }
+
   async verify(userId: string, dto: VerifyCustomerPaymentDto) {
     const customerId = await this.identity.requireCustomerId(userId);
     const booking = await this.findOwnBooking(customerId, dto.bookingId);

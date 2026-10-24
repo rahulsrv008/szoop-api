@@ -19,6 +19,7 @@ import {
   Booking,
   BookingItem,
   BookingVisit,
+  BookingVisitStatus,
   Coupon,
   CouponUsage,
   CustomerAddress,
@@ -57,6 +58,10 @@ import {
   SETTING_KEYS,
   SettingsService,
 } from 'src/common/services/settings.service';
+import {
+  CouponEligibilityService,
+  classifyService,
+} from 'src/common/services/coupon-eligibility.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { CreateCustomerBookingDto } from './dto/create-booking.dto';
 import { CancelCustomerBookingDto } from './dto/cancel-booking.dto';
@@ -126,6 +131,7 @@ export class CustomerBookingsService {
     private readonly eligibility: EligibilityService,
     private readonly wallet: WalletService,
     private readonly closure: BookingClosureService,
+    private readonly couponEligibilityService: CouponEligibilityService,
   ) {}
 
   async create(userId: string, dto: CreateCustomerBookingDto) {
@@ -149,7 +155,7 @@ export class CustomerBookingsService {
     );
 
     const coupon = dto.couponCode
-      ? await this.resolveCoupon(dto.couponCode, subtotal)
+      ? await this.resolveCoupon(dto.couponCode, subtotal, customerId, 'CLEANING')
       : null;
     const discount = coupon?.discount ?? 0;
 
@@ -322,7 +328,16 @@ export class CustomerBookingsService {
         )
       : null;
     const subtotal = cook ? cook.gross : round2(Number(tier.price));
-    const discount = cook ? cook.discount : 0;
+    const baseDiscount = cook ? cook.discount : 0;
+    const coupon = dto.couponCode
+      ? await this.resolveCoupon(
+          dto.couponCode,
+          subtotal - baseDiscount,
+          customerId,
+          classifyService(serviceName),
+        )
+      : null;
+    const discount = round2(baseDiscount + (coupon?.discount ?? 0));
     const taxPercent = await this.settings.getNumber(
       SETTING_KEYS.BOOKING_TAX_PERCENT,
       0,
@@ -385,6 +400,18 @@ export class CustomerBookingsService {
       }),
     );
 
+    if (coupon) {
+      await this.couponUsageRepo.save(
+        this.couponUsageRepo.create({
+          couponId: coupon.coupon.id,
+          customerId,
+          bookingId: booking.id,
+          discountAmount: coupon.discount.toFixed(2),
+        }),
+      );
+      await this.couponRepo.increment({ id: coupon.coupon.id }, 'usedCount', 1);
+    }
+
     await this.attachVisits(booking);
 
     if (totalAmount <= 0) {
@@ -415,9 +442,13 @@ export class CustomerBookingsService {
 
     const { bookingDate, startTime, bookingMode } = scheduledSlot(dto.bookingDate, dto.startTime);
     const subtotal = round2(service.price);
+    const coupon = dto.couponCode
+      ? await this.resolveCoupon(dto.couponCode, subtotal, customerId, 'SALON')
+      : null;
+    const discount = coupon?.discount ?? 0;
     const taxPercent = await this.settings.getNumber(SETTING_KEYS.BOOKING_TAX_PERCENT, 0);
-    const tax = round2((subtotal * taxPercent) / 100);
-    const totalAmount = round2(subtotal + tax);
+    const tax = round2(((subtotal - discount) * taxPercent) / 100);
+    const totalAmount = round2(subtotal - discount + tax);
     const serviceArea = await this.resolveAddressZone(address);
 
     const booking = await this.bookingRepo.save(
@@ -431,7 +462,7 @@ export class CustomerBookingsService {
         bookingMode,
         durationMinutes: service.minutes,
         subtotal: subtotal.toFixed(2),
-        discount: '0.00',
+        discount: discount.toFixed(2),
         tax: tax.toFixed(2),
         totalAmount: totalAmount.toFixed(2),
         paymentStatus: 'PENDING',
@@ -453,6 +484,18 @@ export class CustomerBookingsService {
         paymentStatus: 'PENDING',
       }),
     );
+
+    if (coupon) {
+      await this.couponUsageRepo.save(
+        this.couponUsageRepo.create({
+          couponId: coupon.coupon.id,
+          customerId,
+          bookingId: booking.id,
+          discountAmount: coupon.discount.toFixed(2),
+        }),
+      );
+      await this.couponRepo.increment({ id: coupon.coupon.id }, 'usedCount', 1);
+    }
 
     await this.attachVisits(booking);
     await this.history.record(
@@ -512,13 +555,18 @@ export class CustomerBookingsService {
   }
 
   private presentVisit(visit: BookingVisit) {
+    const today = new Date().toISOString().slice(0, 10);
+    const visitDateStr = String(visit.visitDate).slice(0, 10);
+    const isDone = visit.status === 'done';
+    const isMissed = (visitDateStr < today && !isDone) || (visit.status as string) === 'missed';
     return {
       id: visit.id,
-      visitDate: String(visit.visitDate).slice(0, 10),
+      visitDate: visitDateStr,
       shift: visit.shift,
       startTime: visit.startTime,
       otp: visit.otp,
-      status: visit.status,
+      status: (isDone ? 'done' : isMissed ? 'missed' : visit.status) as BookingVisitStatus,
+      completedAt: visit.completedAt ?? null,
     };
   }
 
@@ -526,9 +574,10 @@ export class CustomerBookingsService {
     const count = await this.bookingRepo
       .createQueryBuilder('booking')
       .where('booking.customerId = :customerId', { customerId })
-      .andWhere('booking.status != :cancelled', { cancelled: 'cancelled' })
-      .andWhere('booking.planTitle ILIKE :trial', { trial: '%Trial pack%' })
-      .andWhere('booking.planTitle ILIKE :cook', { cook: '%cook%' })
+      .andWhere(
+        '((booking.planTitle ILIKE :trial AND booking.planTitle ILIKE :cook) OR (booking.notes ILIKE :trialDays AND (booking.planTitle ILIKE :cook OR booking.notes ILIKE :cook)))',
+        { trial: '%Trial%', cook: '%cook%', trialDays: '%3 days%' },
+      )
       .getCount();
     return count > 0;
   }
@@ -1087,9 +1136,15 @@ export class CustomerBookingsService {
   }
 
   /** Validates a coupon against the subtotal and returns the discount. */
-  private async resolveCoupon(code: string, subtotal: number) {
+  private async resolveCoupon(
+    code: string,
+    subtotal: number,
+    customerId?: string,
+    bookingService?: 'CLEANING' | 'COOKING' | 'SALON',
+  ) {
     const coupon = await this.couponRepo.findOne({
       where: { code: code.trim().toUpperCase() },
+      relations: ['assignedCustomers', 'eligibilityRule'],
     });
     if (!coupon || !coupon.isActive) {
       throw new BadRequestException('This coupon code is not valid');
@@ -1104,6 +1159,71 @@ export class CustomerBookingsService {
     }
     if (coupon.usageLimit !== null && coupon.usedCount >= coupon.usageLimit) {
       throw new BadRequestException('This coupon has reached its usage limit');
+    }
+
+    if (customerId) {
+      if (coupon.eligibilityRule) {
+        const ruleCheck = await this.couponEligibilityService.evaluateRule(
+          customerId,
+          coupon.eligibilityRule,
+          bookingService,
+        );
+        if (!ruleCheck.eligible) {
+          throw new BadRequestException(
+            ruleCheck.reason || 'You are not eligible for this coupon',
+          );
+        }
+      } else if (bookingService) {
+        const upperCode = coupon.code.toUpperCase();
+        if (
+          bookingService === 'COOKING' &&
+          (upperCode.startsWith('CLEAN') || upperCode.startsWith('SALON'))
+        ) {
+          throw new BadRequestException(
+            'This coupon is only valid for Cleaning services',
+          );
+        }
+        if (
+          bookingService === 'CLEANING' &&
+          (upperCode.startsWith('COOK') || upperCode.startsWith('SALON'))
+        ) {
+          throw new BadRequestException(
+            'This coupon is only valid for Cooking services',
+          );
+        }
+        if (
+          bookingService === 'SALON' &&
+          (upperCode.startsWith('CLEAN') || upperCode.startsWith('COOK'))
+        ) {
+          throw new BadRequestException(
+            'This coupon is not valid for Salon services',
+          );
+        }
+      }
+
+      const isDirect = coupon.customerId === customerId;
+      const isAssignedInList = coupon.assignedCustomers?.some(
+        (ac) => ac.customerId === customerId,
+      );
+      const hasRestrictions =
+        Boolean(coupon.customerId) ||
+        (coupon.assignedCustomers && coupon.assignedCustomers.length > 0);
+
+      if (hasRestrictions && !isDirect && !isAssignedInList) {
+        throw new BadRequestException(
+          'This coupon is not valid for your account',
+        );
+      }
+
+      const usedCountByCustomer = await this.couponUsageRepo.count({
+        where: { couponId: coupon.id, customerId },
+      });
+      const perLimit = coupon.perCustomerLimit ?? 1;
+      if (usedCountByCustomer >= perLimit) {
+        throw new BadRequestException(
+          'You have already redeemed this coupon',
+        );
+      }
     }
 
     const minOrderAmount = Number(coupon.minOrderAmount ?? 0);

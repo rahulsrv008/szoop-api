@@ -29,6 +29,7 @@ export const ROUTES = {
     SUPPORT: 'customer/support',
     HOME: 'customer/home',
     SERVICEABILITY: 'customer/serviceability',
+    COUPONS: 'customer/coupons',
   },
 
   AGENT: {
@@ -74,6 +75,7 @@ export const ROUTES = {
     REPORTS: 'admin/reports',
     NOTIFICATIONS: 'admin/notifications',
     SETTINGS: 'admin/settings',
+    COUPON_RULES: 'admin/coupon-rules',
     HOME_CONTENT: 'admin/home-content',
   },
 

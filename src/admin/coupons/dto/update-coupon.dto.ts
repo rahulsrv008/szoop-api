@@ -40,29 +40,55 @@ export class UpdateAdminCouponDto {
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
-  maxDiscount?: number;
+  maxDiscount?: number | null;
 
   @ApiPropertyOptional({ example: 499 })
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
-  minOrderAmount?: number;
+  minOrderAmount?: number | null;
 
   @ApiPropertyOptional({ example: 500 })
   @IsOptional()
   @IsInt()
   @Min(1)
-  usageLimit?: number;
+  usageLimit?: number | null;
 
   @ApiPropertyOptional({ example: '2026-09-01T00:00:00.000Z' })
   @IsOptional()
   @IsDateString()
-  validFrom?: string;
+  validFrom?: string | null;
 
   @ApiPropertyOptional({ example: '2026-09-30T23:59:59.000Z' })
   @IsOptional()
   @IsDateString()
-  validUntil?: string;
+  validUntil?: string | null;
+
+  @ApiPropertyOptional({ example: 'Special discount for VIP customer' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  description?: string | null;
+
+  @ApiPropertyOptional({ example: 1, description: 'Redemptions allowed per customer' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  perCustomerLimit?: number | null;
+
+  @ApiPropertyOptional({ example: 'b0a7...', description: 'Assign to a single customer ID' })
+  @IsOptional()
+  @IsString()
+  customerId?: string | null;
+
+  @ApiPropertyOptional({ type: [String], description: 'Assign to multiple customer IDs' })
+  @IsOptional()
+  customerIds?: string[];
+
+  @ApiPropertyOptional({ example: 'b0a7...', description: 'Link to a Coupon Eligibility Rule ID' })
+  @IsOptional()
+  @IsString()
+  eligibilityRuleId?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -21,7 +21,8 @@ export type WalletTransactionReason =
   | 'BOOKING_CANCELLED'
   | 'BOOKING_EXPIRED'
   | 'UNPAID_BOOKING'
-  | 'DUE_PAID';
+  | 'DUE_PAID'
+  | 'BOOKING_PAYMENT';
 
 /**
  * The customer wallet ledger: the balance is the sum of these rows (credits

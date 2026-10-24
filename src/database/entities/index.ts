@@ -41,7 +41,15 @@ export { Notification } from './notification';
 export type { NotificationApp } from './notification';
 export { SupportTicket } from './support-ticket';
 export { Coupon } from './coupon';
+export { CouponCustomer } from './coupon-customer';
 export { CouponUsage } from './coupon-usage';
+export { CouponEligibilityRule } from './coupon-eligibility-rule';
+export type {
+  RuleServiceType,
+  RuleConditionType,
+  RuleComparisonOperator,
+  CouponRuleCondition,
+} from './coupon-eligibility-rule';
 export { AuditLog } from './audit-log';
 export { Skill } from './skill';
 export { AgentSkill } from './agent-skill';

@@ -20,7 +20,7 @@ import { SwaggerConfig } from './config/swagger.config';
 import { isDeployedEnv, loadEnvFiles, validateEnv } from './config/env';
 import { createWinstonLoggerOptions } from './logger/logger.config';
 import { ensureLogDir, LOG_DIR } from './logger/log-paths';
-import { CustomLoggerService } from './common/utils/logger.service';
+import { CustomLoggerService } from 'src/common/utils/logger.service';
 import { ROUTES } from './app.routes';
 
 /** Boots Nest. On Vercel this returns the Express app and does not listen. */

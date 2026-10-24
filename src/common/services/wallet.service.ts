@@ -100,6 +100,31 @@ export class WalletService implements OnModuleInit {
     });
   }
 
+  /**
+   * Debits the wallet to pay for a booking. Returns the amount debited (0 if failed).
+   */
+  async debitBooking(
+    booking: Pick<Booking, 'id' | 'customerId' | 'totalAmount'>,
+    manager?: EntityManager,
+  ) {
+    const amount = Number(booking.totalAmount);
+    if (!(amount > 0)) return 0;
+    const repo = manager ? manager.getRepository(WalletTransaction) : this.walletRepo;
+    const result = await repo
+      .createQueryBuilder()
+      .insert()
+      .values({
+        customerId: booking.customerId,
+        bookingId: booking.id,
+        type: 'DEBIT',
+        reason: 'BOOKING_PAYMENT' as WalletTransactionReason,
+        amount: amount.toFixed(2),
+      })
+      .returning(['id'])
+      .execute();
+    return (result.raw as unknown[]).length ? amount : 0;
+  }
+
   /** The customer paid a booking they owed: clear its due. Returns the amount cleared (0 if none was owed). */
   async settleDue(bookingId: string, manager?: EntityManager) {
     const repo = manager ? manager.getRepository(WalletTransaction) : this.walletRepo;

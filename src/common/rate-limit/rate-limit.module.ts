@@ -6,11 +6,11 @@ import {
   ThrottlerModule,
   ThrottlerModuleOptions,
 } from '@nestjs/throttler';
-import { TokenService } from 'src/common/auth/token.service';
-import { RATE_LIMIT_RULE } from './rate-limit.decorator';
-import { RateLimitRule } from './rate-limit.rules';
-import { RateLimitStorage } from './rate-limit.storage';
-import { RateLimitStats } from './rate-limit.stats';
+import * as jwt from 'jsonwebtoken';
+import { RATE_LIMIT_RULE } from 'src/common/rate-limit/rate-limit.decorator';
+import { RateLimitRule } from 'src/common/rate-limit/rate-limit.rules';
+import { RateLimitStorage } from 'src/common/rate-limit/rate-limit.storage';
+import { RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
 
 type Req = { ip?: string; socket?: { remoteAddress?: string }; headers: Record<string, string | undefined> };
 
@@ -37,15 +37,20 @@ export function clientIp(req: Req): string {
   return `${groups.slice(0, 4).join(':')}::/64`;
 }
 
-export function rateLimitTracker(tokens: TokenService) {
+export function rateLimitTracker() {
   return (req: Req): string => {
     const header = req.headers?.authorization;
     if (header?.startsWith('Bearer ')) {
-      try {
-        // Verified, so a forged token can't pick someone else's counter.
-        return `user:${tokens.verifyAccessToken(header.slice(7)).sub}`;
-      } catch {
-        // Invalid or expired: count by IP; the auth guard rejects it anyway.
+      const secret = process.env.JWT_SECRET;
+      if (secret) {
+        try {
+          const payload = jwt.verify(header.slice(7), secret, { algorithms: ['HS256'] }) as { sub?: string };
+          if (payload?.sub) {
+            return `user:${payload.sub}`;
+          }
+        } catch {
+          // Invalid or expired: count by IP; the auth guard rejects it anyway.
+        }
       }
     }
     return `ip:${clientIp(req)}`;
@@ -72,8 +77,8 @@ export class RateLimitGuard extends ThrottlerGuard {
 
 /** One storage instance (one Redis connection) for the guard and for services. */
 @Global()
-@Module({ providers: [RateLimitStorage, RateLimitStats], exports: [RateLimitStorage, RateLimitStats] })
-export class RateLimitStorageModule {}
+@Module({ providers: [RateLimitStorage], exports: [RateLimitStorage] })
+export class RateLimitStorageModule { }
 
 /**
  * Two counters per request:
@@ -85,9 +90,9 @@ export class RateLimitStorageModule {}
     RateLimitStorageModule,
     ThrottlerModule.forRootAsync({
       imports: [RateLimitStorageModule],
-      inject: [RateLimitStorage, TokenService],
-      useFactory: (storage: RateLimitStorage, tokens: TokenService): ThrottlerModuleOptions => {
-        const track = rateLimitTracker(tokens);
+      inject: [RateLimitStorage],
+      useFactory: (storage: RateLimitStorage): ThrottlerModuleOptions => {
+        const track = rateLimitTracker();
         const enabled = (process.env.RATE_LIMIT_ENABLED ?? 'true').toLowerCase() !== 'false';
         return {
           storage,
@@ -117,4 +122,4 @@ export class RateLimitStorageModule {}
   ],
   providers: [{ provide: APP_GUARD, useClass: RateLimitGuard }],
 })
-export class RateLimitModule {}
+export class RateLimitModule { }
