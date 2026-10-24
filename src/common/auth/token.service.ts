@@ -113,7 +113,9 @@ export class TokenService {
 
   verifyAccessToken(token: string): AuthUser {
     try {
-      return jwt.verify(token, this.accessSecret()) as AuthUser;
+      return jwt.verify(token, this.accessSecret(), {
+        algorithms: ['HS256'],
+      }) as AuthUser;
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
     }
@@ -130,6 +132,7 @@ export class TokenService {
       adminId: user.adminId,
     };
     return jwt.sign(payload, this.accessSecret(), {
+      algorithm: 'HS256',
       expiresIn: this.accessTtlSeconds(),
     });
   }

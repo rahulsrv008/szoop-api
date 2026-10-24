@@ -12,7 +12,10 @@ import { NotificationDispatchService } from 'src/common/services/notification-di
 import { WalletService } from 'src/common/services/wallet.service';
 import { MAX_PAYMENT_ATTEMPTS, PAYMENT_WINDOW_MINUTES } from 'src/common/booking/booking-status';
 import { CustomLoggerService } from 'src/common/utils/logger.service';
-import { RazorpayService } from 'src/integrations/payments/razorpay.service';
+import {
+  mapRazorpayMethod,
+  RazorpayService,
+} from 'src/integrations/payments/razorpay.service';
 import { DispatchService } from 'src/dispatch/dispatch.service';
 import { CreateCustomerPaymentDto } from './dto/create-payment.dto';
 import { VerifyCustomerPaymentDto } from './dto/verify-payment.dto';
@@ -64,8 +67,8 @@ export class CustomerPaymentsService {
     }
 
     const amountPaise = Math.round(Number(booking.totalAmount) * 100);
-    if (amountPaise <= 0) {
-      throw new BadRequestException('This booking has nothing left to pay');
+    if (amountPaise < 100) {
+      throw new BadRequestException('Minimum payable amount is ₹1');
     }
 
     const payment = await this.ensurePayment(booking, customerId);
@@ -125,6 +128,22 @@ export class CustomerPaymentsService {
       dto.razorpaySignature,
     );
     const payment = await this.ensurePayment(booking, customerId);
+    if (
+      booking.paymentStatus === 'PAID' ||
+      payment.paymentStatus === 'PAID'
+    ) {
+      return {
+        bookingId: booking.id,
+        bookingNumber: booking.bookingNumber,
+        status: booking.status,
+        paymentStatus: 'PAID' as const,
+        totalAmount: Number(booking.totalAmount),
+        paymentId: payment.id,
+        transactionId: paymentTransactionId(payment) ?? dto.razorpayPaymentId,
+        paidAt: payment.paidAt,
+        refundedToWallet: 0,
+      };
+    }
     const transaction = await this.transactionRepo.findOne({
       where: {
         paymentId: payment.id,
@@ -149,12 +168,26 @@ export class CustomerPaymentsService {
       throw new BadRequestException('Payment signature verification failed');
     }
 
-    const captured = await this.capture(booking.id, payment.id, dto.razorpayPaymentId, {
-      razorpayOrderId: dto.razorpayOrderId,
-      razorpayPaymentId: dto.razorpayPaymentId,
-      verified: check.verified,
-      signatureSkipped: check.skipped,
-    }, userId, 'Payment captured');
+    const capturedMethod =
+      (await this.razorpay.fetchPaymentMethod(dto.razorpayPaymentId)) ??
+      (payment.paymentMethod?.startsWith('UPI_') ? 'UPI' : payment.paymentMethod) ??
+      'RAZORPAY';
+
+    const captured = await this.capture(
+      booking.id,
+      payment.id,
+      dto.razorpayPaymentId,
+      {
+        razorpayOrderId: dto.razorpayOrderId,
+        razorpayPaymentId: dto.razorpayPaymentId,
+        verified: check.verified,
+        signatureSkipped: check.skipped,
+        paymentMethod: capturedMethod,
+      },
+      userId,
+      'Payment captured',
+      capturedMethod,
+    );
 
     return {
       bookingId: booking.id,
@@ -262,7 +295,18 @@ export class CustomerPaymentsService {
     });
     if (alreadyCaptured) return { received: true };
 
-    await this.capture(payment.bookingId, payment.id, gatewayPaymentId, body, null, 'Payment captured (webhook)');
+    const webhookMethod = typeof paymentEntity?.method === 'string'
+      ? mapRazorpayMethod(paymentEntity.method)
+      : undefined;
+    await this.capture(
+      payment.bookingId,
+      payment.id,
+      gatewayPaymentId,
+      body,
+      null,
+      'Payment captured (webhook)',
+      webhookMethod,
+    );
     return { received: true };
   }
 
@@ -303,6 +347,7 @@ export class CustomerPaymentsService {
     gatewayResponse: Record<string, unknown>,
     changedBy: string | null,
     remarks: string,
+    paymentMethod?: string | null,
   ) {
     const result = await this.bookingRepo.manager.transaction(async (manager) => {
       const booking = await manager.findOneOrFail(Booking, {
@@ -323,7 +368,7 @@ export class CustomerPaymentsService {
         }),
       );
       payment.paidAt = payment.paidAt ?? new Date();
-      payment.paymentMethod = payment.paymentMethod ?? GATEWAY;
+      payment.paymentMethod = paymentMethod ?? payment.paymentMethod ?? 'RAZORPAY';
 
       if (CLOSED.includes(booking.status)) {
         if (payment.paymentStatus === 'REFUNDED') {

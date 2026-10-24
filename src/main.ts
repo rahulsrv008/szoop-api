@@ -34,6 +34,7 @@ export async function createServer(listen = !process.env.VERCEL) {
 
   if (!process.env.VERCEL) ensureLogDir();
   const customLoggerService = app.get(CustomLoggerService);
+  const deployed = isDeployedEnv(appEnv);
 
   const expressApp = app.getHttpAdapter().getInstance() as {
     set: (key: string, value: unknown) => void;
@@ -44,6 +45,9 @@ export async function createServer(listen = !process.env.VERCEL) {
     helmet({
       contentSecurityPolicy: false,
       crossOriginEmbedderPolicy: false,
+      hsts: deployed
+        ? { maxAge: 15552000, includeSubDomains: true }
+        : false,
     }),
   );
   app.use(compression());
@@ -101,7 +105,6 @@ export async function createServer(listen = !process.env.VERCEL) {
 
   const configService = app.get(ConfigService);
   const port = Number(configService.get('PORT')) || 3000;
-  const deployed = isDeployedEnv(appEnv);
 
   const allowedOrigins = (configService.get<string>('ALLOWED_ORIGINS') ?? '')
     .split(',')
