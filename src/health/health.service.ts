@@ -5,7 +5,7 @@ import { from, of, Observable } from 'rxjs';
 import { map, catchError } from 'rxjs/operators';
 import { appVersion } from '../common/utils/version';
 import { resolveAppEnv } from '../config/env';
-import { RateLimitStorage, RateLimitStoreStatus } from '../common/rate-limit/rate-limit.storage';
+import { RateLimitStorage, RateLimitStoreStatus } from 'src/common/rate-limit/rate-limit.storage';
 
 export type HealthPayload = {
   status: 'ok' | 'degraded';

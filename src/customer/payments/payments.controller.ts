@@ -37,4 +37,16 @@ export class CustomerPaymentsController {
   ) {
     return this.paymentsService.verify(userId, dto);
   }
+
+  @Post('wallet')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Pay for a booking using wallet balance',
+  })
+  payWithWallet(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: { bookingId: string },
+  ) {
+    return this.paymentsService.payWithWallet(userId, dto.bookingId);
+  }
 }

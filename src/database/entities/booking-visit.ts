@@ -10,7 +10,7 @@ import {
 import { Booking } from './booking';
 
 export type BookingVisitShift = 'morning' | 'evening' | 'visit';
-export type BookingVisitStatus = 'pending' | 'active' | 'done';
+export type BookingVisitStatus = 'pending' | 'active' | 'done' | 'missed';
 
 @Entity('booking_visits')
 export class BookingVisit {

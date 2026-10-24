@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { appVersion } from './common/utils/version';
 import { resolveAppEnv } from './config/env';
-import { RateLimitStorage } from './common/rate-limit/rate-limit.storage';
+import { RateLimitStorage } from 'src/common/rate-limit/rate-limit.storage';
 
 @Injectable()
 export class AppService {

@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository, SelectQueryBuilder } from 'typeorm';
-import { Coupon, CouponUsage } from 'src/database/entities';
+import { Coupon, CouponCustomer, CouponUsage } from 'src/database/entities';
 import { AuditService } from 'src/common/services/audit.service';
 import {
   PaginationQueryDto,
@@ -21,6 +21,8 @@ import { UpdateAdminCouponDto } from './dto/update-coupon.dto';
 export class AdminCouponsService {
   constructor(
     @InjectRepository(Coupon) private readonly couponRepo: Repository<Coupon>,
+    @InjectRepository(CouponCustomer)
+    private readonly couponCustomerRepo: Repository<CouponCustomer>,
     @InjectRepository(CouponUsage)
     private readonly usageRepo: Repository<CouponUsage>,
     private readonly audit: AuditService,
@@ -31,6 +33,10 @@ export class AdminCouponsService {
 
     const [rows, total] = await Promise.all([
       this.applyFilters(this.couponRepo.createQueryBuilder('coupon'), query)
+        .leftJoinAndSelect('coupon.assignedCustomers', 'assignedCustomers')
+        .leftJoinAndSelect('coupon.customer', 'customer')
+        .leftJoinAndSelect('customer.user', 'customerUser')
+        .leftJoinAndSelect('coupon.eligibilityRule', 'eligibilityRule')
         .orderBy('coupon.createdAt', 'DESC')
         .offset(skip)
         .limit(take)
@@ -62,21 +68,41 @@ export class AdminCouponsService {
     const coupon = await this.couponRepo.save(
       this.couponRepo.create({
         code,
+        description: dto.description ? String(dto.description).trim() : null,
         discountType: dto.discountType,
-        discountValue: dto.discountValue.toFixed(2),
+        discountValue: Number(dto.discountValue).toFixed(2),
         maxDiscount:
-          dto.maxDiscount === undefined ? null : dto.maxDiscount.toFixed(2),
+          dto.maxDiscount != null ? Number(dto.maxDiscount).toFixed(2) : null,
         minOrderAmount:
-          dto.minOrderAmount === undefined
-            ? null
-            : dto.minOrderAmount.toFixed(2),
+          dto.minOrderAmount != null
+            ? Number(dto.minOrderAmount).toFixed(2)
+            : null,
         usageLimit: dto.usageLimit ?? null,
+        perCustomerLimit: dto.perCustomerLimit ?? 1,
+        customerId:
+          dto.customerId && String(dto.customerId).trim()
+            ? String(dto.customerId).trim()
+            : null,
+        eligibilityRuleId:
+          dto.eligibilityRuleId && String(dto.eligibilityRuleId).trim()
+            ? String(dto.eligibilityRuleId).trim()
+            : null,
         usedCount: 0,
         validFrom: dto.validFrom ? new Date(dto.validFrom) : null,
         validUntil: dto.validUntil ? new Date(dto.validUntil) : null,
         isActive: dto.isActive ?? true,
       }),
     );
+
+    if (dto.customerIds && dto.customerIds.length > 0) {
+      const links = dto.customerIds.map((cId) =>
+        this.couponCustomerRepo.create({
+          couponId: coupon.id,
+          customerId: cId,
+        }),
+      );
+      await this.couponCustomerRepo.save(links);
+    }
 
     await this.audit.record({
       userId: adminId,
@@ -87,7 +113,7 @@ export class AdminCouponsService {
       newData: this.snapshot(coupon),
     });
 
-    return this.toResponse(coupon);
+    return this.toResponse(await this.requireCoupon(coupon.id));
   }
 
   async update(adminId: string, id: string, dto: UpdateAdminCouponDto) {
@@ -107,20 +133,54 @@ export class AdminCouponsService {
     }
     if (dto.discountType !== undefined) coupon.discountType = dto.discountType;
     if (dto.discountValue !== undefined) {
-      coupon.discountValue = dto.discountValue.toFixed(2);
+      coupon.discountValue = Number(dto.discountValue).toFixed(2);
     }
     if (dto.maxDiscount !== undefined) {
-      coupon.maxDiscount = dto.maxDiscount.toFixed(2);
+      coupon.maxDiscount =
+        dto.maxDiscount != null ? Number(dto.maxDiscount).toFixed(2) : null;
     }
     if (dto.minOrderAmount !== undefined) {
-      coupon.minOrderAmount = dto.minOrderAmount.toFixed(2);
+      coupon.minOrderAmount =
+        dto.minOrderAmount != null
+          ? Number(dto.minOrderAmount).toFixed(2)
+          : null;
+    }
+    if (dto.description !== undefined) {
+      coupon.description = dto.description ? String(dto.description).trim() : null;
+    }
+    if (dto.perCustomerLimit !== undefined) {
+      coupon.perCustomerLimit = dto.perCustomerLimit;
+    }
+    if (dto.customerId !== undefined) {
+      coupon.customerId =
+        dto.customerId && String(dto.customerId).trim()
+          ? String(dto.customerId).trim()
+          : null;
+    }
+    if (dto.eligibilityRuleId !== undefined) {
+      coupon.eligibilityRuleId =
+        dto.eligibilityRuleId && String(dto.eligibilityRuleId).trim()
+          ? String(dto.eligibilityRuleId).trim()
+          : null;
+    }
+    if (dto.customerIds !== undefined) {
+      await this.couponCustomerRepo.delete({ couponId: coupon.id });
+      if (dto.customerIds.length > 0) {
+        const links = dto.customerIds.map((cId) =>
+          this.couponCustomerRepo.create({
+            couponId: coupon.id,
+            customerId: cId,
+          }),
+        );
+        await this.couponCustomerRepo.save(links);
+      }
     }
     if (dto.usageLimit !== undefined) coupon.usageLimit = dto.usageLimit;
     if (dto.validFrom !== undefined) {
-      coupon.validFrom = new Date(dto.validFrom);
+      coupon.validFrom = dto.validFrom ? new Date(dto.validFrom) : null;
     }
     if (dto.validUntil !== undefined) {
-      coupon.validUntil = new Date(dto.validUntil);
+      coupon.validUntil = dto.validUntil ? new Date(dto.validUntil) : null;
     }
     if (dto.isActive !== undefined) coupon.isActive = dto.isActive;
 
@@ -138,7 +198,7 @@ export class AdminCouponsService {
       newData: this.snapshot(coupon),
     });
 
-    return this.toResponse(coupon);
+    return this.toResponse(await this.requireCoupon(coupon.id));
   }
 
   /** Redeemed coupons are kept for reporting, so they are only deactivated. */
@@ -280,7 +340,15 @@ export class AdminCouponsService {
   }
 
   private async requireCoupon(id: string) {
-    const coupon = await this.couponRepo.findOne({ where: { id } });
+    const coupon = await this.couponRepo.findOne({
+      where: { id },
+      relations: [
+        'assignedCustomers',
+        'customer',
+        'customer.user',
+        'eligibilityRule',
+      ],
+    });
     if (!coupon) throw new NotFoundException('Coupon not found');
     return coupon;
   }
@@ -288,11 +356,15 @@ export class AdminCouponsService {
   private snapshot(coupon: Coupon) {
     return {
       code: coupon.code,
+      description: coupon.description,
       discountType: coupon.discountType,
       discountValue: coupon.discountValue,
       maxDiscount: coupon.maxDiscount,
       minOrderAmount: coupon.minOrderAmount,
       usageLimit: coupon.usageLimit,
+      perCustomerLimit: coupon.perCustomerLimit,
+      customerId: coupon.customerId,
+      eligibilityRuleId: coupon.eligibilityRuleId,
       validFrom: coupon.validFrom,
       validUntil: coupon.validUntil,
       isActive: coupon.isActive,
@@ -300,9 +372,24 @@ export class AdminCouponsService {
   }
 
   private toResponse(coupon: Coupon) {
+    const assigned =
+      coupon.assignedCustomers?.map((ac) => ac.customerId) ?? [];
+    if (coupon.customerId && !assigned.includes(coupon.customerId)) {
+      assigned.push(coupon.customerId);
+    }
+
+    const customerName = coupon.customer
+      ? [coupon.customer.firstName, coupon.customer.lastName]
+          .filter(Boolean)
+          .join(' ') ||
+        coupon.customer.user?.mobile ||
+        'Customer'
+      : null;
+
     return {
       id: coupon.id,
       code: coupon.code,
+      description: coupon.description,
       discountType: coupon.discountType,
       discountValue: Number(coupon.discountValue),
       maxDiscount:
@@ -311,6 +398,12 @@ export class AdminCouponsService {
         coupon.minOrderAmount === null ? null : Number(coupon.minOrderAmount),
       usageLimit: coupon.usageLimit,
       usedCount: coupon.usedCount,
+      perCustomerLimit: coupon.perCustomerLimit ?? 1,
+      customerId: coupon.customerId,
+      customerName,
+      assignedCustomerIds: assigned,
+      eligibilityRuleId: coupon.eligibilityRuleId,
+      eligibilityRuleName: coupon.eligibilityRule?.name ?? null,
       validFrom: coupon.validFrom,
       validUntil: coupon.validUntil,
       isActive: coupon.isActive,

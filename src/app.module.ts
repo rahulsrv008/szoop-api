@@ -13,7 +13,7 @@ import { AgentModule } from './agent/agent.module';
 import { AdminModule } from './admin/admin.module';
 import { DispatchModule } from './dispatch/dispatch.module';
 import { AdminAccessInterceptor } from './common/auth/admin-access.interceptor';
-import { RateLimitModule } from './common/rate-limit/rate-limit.module';
+import { RateLimitModule, RateLimitStorageModule } from './common/rate-limit/rate-limit.module';
 
 @Module({
   imports: [
@@ -29,6 +29,7 @@ import { RateLimitModule } from './common/rate-limit/rate-limit.module';
     }),
     DatabaseModule,
     IntegrationsModule,
+    RateLimitStorageModule,
     CommonModule,
     RateLimitModule,
     HealthModule,

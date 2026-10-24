@@ -20,6 +20,7 @@ import { AdminSupportModule } from './support/support.module';
 import { AdminReportsModule } from './reports/reports.module';
 import { AdminNotificationsModule } from './notifications/notifications.module';
 import { AdminSettingsModule } from './settings/settings.module';
+import { AdminCouponRulesModule } from './coupon-rules/coupon-rules.module';
 import { AdminHomeContentModule } from './home-content/home-content.module';
 
 /** Admin Web (Angular) — everything under /api/v1/admin/*. */
@@ -46,6 +47,7 @@ import { AdminHomeContentModule } from './home-content/home-content.module';
     AdminReportsModule,
     AdminNotificationsModule,
     AdminSettingsModule,
+    AdminCouponRulesModule,
     AdminHomeContentModule,
   ],
 })

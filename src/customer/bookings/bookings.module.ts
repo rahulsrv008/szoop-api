@@ -19,6 +19,7 @@ import {
 import { CustomerBookingsController } from './bookings.controller';
 import { CustomerBookingsService } from './bookings.service';
 import { DispatchModule } from 'src/dispatch/dispatch.module';
+import { CouponEligibilityService } from 'src/common/services/coupon-eligibility.service';
 
 @Module({
   imports: [
@@ -41,6 +42,6 @@ import { DispatchModule } from 'src/dispatch/dispatch.module';
     DispatchModule,
   ],
   controllers: [CustomerBookingsController],
-  providers: [CustomerBookingsService],
+  providers: [CustomerBookingsService, CouponEligibilityService],
 })
 export class CustomerBookingsModule {}

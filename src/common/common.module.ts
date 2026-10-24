@@ -21,18 +21,20 @@ import {
   User,
   WalletTransaction,
 } from 'src/database/entities';
-import { IdentityService } from './auth/identity.service';
-import { TokenService } from './auth/token.service';
-import { OtpService } from './auth/otp.service';
-import { AuditService } from './services/audit.service';
-import { NotificationDispatchService } from './services/notification-dispatch.service';
-import { BookingHistoryService } from './booking/booking-history.service';
-import { SettingsService } from './services/settings.service';
-import { ZoneResolverService } from './services/zone-resolver.service';
-import { ServiceabilityService } from './services/serviceability.service';
-import { AdminAccessService } from './auth/admin-access';
-import { WalletService } from './services/wallet.service';
-import { BookingClosureService } from './booking/booking-closure.service';
+import { IdentityService } from 'src/common/auth/identity.service';
+import { TokenService } from 'src/common/auth/token.service';
+import { OtpService } from 'src/common/auth/otp.service';
+import { AuditService } from 'src/common/services/audit.service';
+import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
+import { BookingHistoryService } from 'src/common/booking/booking-history.service';
+import { SettingsService } from 'src/common/services/settings.service';
+import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
+import { ServiceabilityService } from 'src/common/services/serviceability.service';
+import { AdminAccessService } from 'src/common/auth/admin-access';
+import { WalletService } from 'src/common/services/wallet.service';
+import { BookingClosureService } from 'src/common/booking/booking-closure.service';
+import { IntegrationsModule } from 'src/integrations/integrations.module';
+import { RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
 
 /**
  * Cross-app building blocks (identity, tokens, OTP, audit, notifications).
@@ -42,6 +44,7 @@ import { BookingClosureService } from './booking/booking-closure.service';
 @Global()
 @Module({
   imports: [
+    IntegrationsModule,
     TypeOrmModule.forFeature([
       User,
       Customer,
@@ -77,6 +80,7 @@ import { BookingClosureService } from './booking/booking-closure.service';
     AdminAccessService,
     WalletService,
     BookingClosureService,
+    RateLimitStats,
   ],
   exports: [
     IdentityService,
@@ -91,6 +95,7 @@ import { BookingClosureService } from './booking/booking-closure.service';
     AdminAccessService,
     WalletService,
     BookingClosureService,
+    RateLimitStats,
   ],
 })
 export class CommonModule {}
