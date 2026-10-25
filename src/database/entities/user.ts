@@ -33,6 +33,10 @@ export class User {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  /** Set when the customer asked to delete. Login on this number starts a new customer. */
+  @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  deletedAt: Date | null;
+
   @OneToOne(() => Customer, (customer) => customer.user)
   customer: Customer | null;
 

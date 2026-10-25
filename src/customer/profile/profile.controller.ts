@@ -1,8 +1,10 @@
-import { Body, Controller, Get, Patch } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Patch } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ROUTES } from 'src/app.routes';
 import { CustomerAuth } from 'src/common/decorators/authorize.decorator';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 import { CustomerProfileService } from './profile.service';
 import { UpdateCustomerProfileDto } from './dto/update-profile.dto';
 
@@ -25,5 +27,14 @@ export class CustomerProfileController {
     @Body() dto: UpdateCustomerProfileDto,
   ) {
     return this.profileService.update(userId, dto);
+  }
+
+  @Delete()
+  @RateLimit(RATE_LIMITS.ACCOUNT_DELETE)
+  @ApiOperation({
+    summary: 'Request account deletion: block the customer and open an admin ticket',
+  })
+  remove(@CurrentUser('sub') userId: string) {
+    return this.profileService.deleteAccount(userId);
   }
 }

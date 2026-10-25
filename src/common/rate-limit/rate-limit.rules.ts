@@ -35,6 +35,8 @@ export const RATE_LIMITS = {
   AGENT_LOCATION: { bucket: 'agent-location', limit: 30, ttl: MINUTE, by: 'user' },
   AGENT_DOCUMENT: { bucket: 'agent-document', limit: 20, ttl: HOUR, by: 'user' },
   CITY_WAITLIST: { bucket: 'city-waitlist', limit: 10, ttl: HOUR, by: 'user' },
+  ACCOUNT_DELETION: { bucket: 'account-deletion', limit: 5, ttl: HOUR, by: 'ip' },
+  ACCOUNT_DELETE: { bucket: 'account-delete', limit: 3, ttl: HOUR, by: 'user' },
 } satisfies Record<string, RateLimitRule>;
 
 /** Per-account / per-number limits enforced in services (not by IP). */

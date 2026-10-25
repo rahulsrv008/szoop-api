@@ -20,19 +20,60 @@ export class IdentityService {
 
   async findOrCreateUser(mobile: string, role: UserType) {
     let user = await this.userRepo.findOne({ where: { mobile } });
-    if (!user) {
+
+    if (user?.deletedAt && role === 'customer') {
+      user = await this.startFreshCustomer(user, mobile);
+    } else if (!user) {
       user = await this.userRepo.save(
         this.userRepo.create({ mobile, userType: role, isActive: true }),
       );
     }
+
     if (!user.isActive) {
-      throw new ForbiddenException('This account has been blocked');
+      throw new ForbiddenException(
+        user.deletedAt
+          ? 'This account has been deleted'
+          : 'This account has been blocked',
+      );
     }
 
     if (role === 'customer') await this.ensureCustomer(user.id);
     if (role === 'agent') await this.ensureAgent(user.id);
 
     return user;
+  }
+
+  /**
+   * A deleted customer who signs in again becomes a new customer. The old row
+   * stays for admin. If the same user is also an agent, the mobile cannot be
+   * freed, so the customer profile is reset instead.
+   */
+  private async startFreshCustomer(existing: User, mobile: string) {
+    const agent = await this.agentRepo.findOne({
+      where: { userId: existing.id },
+      select: ['id'],
+    });
+
+    if (agent) {
+      existing.deletedAt = null;
+      existing.isActive = true;
+      await this.userRepo.save(existing);
+      const customer = await this.ensureCustomer(existing.id);
+      customer.firstName = null;
+      customer.lastName = null;
+      customer.profileImage = null;
+      customer.gender = null;
+      customer.dateOfBirth = null;
+      await this.customerRepo.save(customer);
+      return existing;
+    }
+
+    existing.mobile = `d${existing.id.replace(/-/g, '').slice(0, 14)}`;
+    await this.userRepo.save(existing);
+
+    return this.userRepo.save(
+      this.userRepo.create({ mobile, userType: 'customer', isActive: true }),
+    );
   }
 
   async ensureCustomer(userId: string) {
@@ -62,7 +103,11 @@ export class IdentityService {
     });
     if (!user) throw new NotFoundException('User not found');
     if (!user.isActive) {
-      throw new ForbiddenException('This account has been blocked');
+      throw new ForbiddenException(
+        user.deletedAt
+          ? 'This account has been deleted'
+          : 'This account has been blocked',
+      );
     }
 
     return {
@@ -105,10 +150,14 @@ export class IdentityService {
 
     const row = await this.userRepo.findOne({
       where: { id: user.sub },
-      select: ['id', 'isActive'],
+      select: ['id', 'isActive', 'deletedAt'],
     });
     if (!row?.isActive) {
-      throw new ForbiddenException('This account has been blocked');
+      throw new ForbiddenException(
+        row?.deletedAt
+          ? 'This account has been deleted'
+          : 'This account has been blocked',
+      );
     }
   }
 

@@ -30,6 +30,7 @@ interface CustomerListRow {
   mobile: string;
   email: string | null;
   isActive: boolean;
+  deletedAt: Date | null;
   totalBookings: number;
   lastBookingDate: string | null;
   createdAt: Date;
@@ -72,6 +73,7 @@ export class AdminCustomersService {
       .addSelect('user.mobile', 'mobile')
       .addSelect('user.email', 'email')
       .addSelect('user.isActive', 'isActive')
+      .addSelect('user.deletedAt', 'deletedAt')
       .addSelect('customer.createdAt', 'createdAt')
       .addSelect('customer.homeZoneId', 'homeZoneId')
       .addSelect('COUNT(booking.id)::int', 'totalBookings')
@@ -108,6 +110,7 @@ export class AdminCustomersService {
         mobile: row.mobile,
         email: row.email,
         isActive: row.isActive,
+        deletedAt: row.deletedAt,
         totalBookings: Number(row.totalBookings),
         lastBookingDate: row.lastBookingDate,
         createdAt: row.createdAt,
@@ -159,6 +162,7 @@ export class AdminCustomersService {
       mobile: customer.user.mobile,
       email: customer.user.email,
       isActive: customer.user.isActive,
+      deletedAt: customer.user.deletedAt,
       firstName: customer.firstName,
       lastName: customer.lastName,
       name: this.fullName(customer.firstName, customer.lastName),
@@ -288,6 +292,7 @@ export class AdminCustomersService {
     const wasActive = customer.user.isActive;
 
     customer.user.isActive = true;
+    customer.user.deletedAt = null;
     await this.userRepo.save(customer.user);
 
     await this.notifications.toUser(customer.userId, {

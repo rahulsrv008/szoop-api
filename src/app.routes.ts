@@ -19,6 +19,7 @@ export const ROUTES = {
   CUSTOMER: {
     AUTH: 'customer/auth',
     PROFILE: 'customer/profile',
+    ACCOUNT_DELETION: 'customer/account-deletion',
     ADDRESSES: 'customer/addresses',
     SERVICES: 'customer/services',
     BOOKINGS: 'customer/bookings',

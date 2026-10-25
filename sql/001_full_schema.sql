@@ -50,6 +50,7 @@ CREATE TABLE users (
     email VARCHAR(255),
     user_type VARCHAR(20) NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
+    deleted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
