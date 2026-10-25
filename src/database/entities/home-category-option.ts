@@ -45,6 +45,10 @@ export class HomeCategoryOption {
   @Column({ type: 'jsonb', default: () => "'[]'" })
   highlights: HomeHighlight[];
 
+  /** What this option doesn't cover, shown in its description and at checkout. */
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  exclusions: string[];
+
   /** Shifts offered for this plan (Morning / Evening / Both). */
   @Column({ type: 'jsonb', default: () => "'[]'" })
   pricing: HomePricingTier[];

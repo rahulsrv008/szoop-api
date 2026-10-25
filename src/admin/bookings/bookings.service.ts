@@ -18,6 +18,7 @@ import { NotificationDispatchService } from 'src/common/services/notification-di
 import { BookingClosureService, couponNote } from 'src/common/booking/booking-closure.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { DispatchService } from 'src/dispatch/dispatch.service';
+import { AgentSkillsService } from 'src/agent/skills/skills.service';
 import { ListAdminBookingsDto } from './dto/list-bookings.dto';
 import { AssignAdminBookingAgentDto } from './dto/assign-agent.dto';
 import { ReassignAdminBookingAgentDto } from './dto/reassign-agent.dto';
@@ -69,6 +70,7 @@ export class AdminBookingsService {
     private readonly access: AdminAccessService,
     private readonly dispatch: DispatchService,
     private readonly closure: BookingClosureService,
+    private readonly skills: AgentSkillsService,
   ) {}
 
   async list(query: ListAdminBookingsDto) {
@@ -279,6 +281,7 @@ export class AdminBookingsService {
     }
 
     const agent = await this.requireAssignableAgent(dto.agentId);
+    await this.assertCanTake(booking, agent.id);
     await this.assertNoClash(booking, agent.id);
 
     const oldData = { agentId: booking.agentId, status: booking.status };
@@ -350,6 +353,7 @@ export class AdminBookingsService {
       select: ['id', 'userId', 'firstName', 'lastName'],
     });
     const agent = await this.requireAssignableAgent(dto.agentId);
+    await this.assertCanTake(booking, agent.id);
     await this.assertNoClash(booking, agent.id);
 
     const oldData = { agentId: booking.agentId, status: booking.status };
@@ -484,6 +488,19 @@ export class AdminBookingsService {
       throw new BadRequestException('Agent is suspended');
     }
     return agent;
+  }
+
+  /** Bathroom jobs only go to agents with the Bathroom Cleaning skill. */
+  private async assertCanTake(booking: Booking, agentId: string) {
+    const withItems = await this.bookingRepo.findOne({
+      where: { id: booking.id },
+      relations: ['items', 'items.service'],
+    });
+    if (withItems && !(await this.skills.canTake(agentId, withItems))) {
+      throw new BadRequestException(
+        'This agent does not have the Bathroom Cleaning skill',
+      );
+    }
   }
 
   private async assertNoClash(booking: Booking, agentId: string) {

@@ -476,7 +476,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
           !nearTerm || (live && km !== null && canReachInTime(km, minutesToStart)),
       )
       .filter(({ agent }) =>
-        hasSkillFor(booking, contexts.get(agent.id)?.keywords ?? []),
+        hasSkillFor(booking, contexts.get(agent.id) ?? { keywords: [], skillCodes: [] }),
       );
 
     const blocked = await this.eligibility.conflictPairs(

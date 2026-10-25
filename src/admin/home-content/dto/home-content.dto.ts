@@ -88,6 +88,18 @@ class HighlightsField {
   highlights?: HomeHighlightDto[];
 
   @ApiPropertyOptional({
+    type: [String],
+    example: ['Bathrooms and washrooms'],
+    description: 'What the service does not cover; shown in its description and at checkout',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @IsString({ each: true })
+  @MaxLength(120, { each: true })
+  exclusions?: string[];
+
+  @ApiPropertyOptional({
     type: [HomePricingTierDto],
     description: 'Durations (On Demand) or shifts (monthly plans) the customer picks from',
   })

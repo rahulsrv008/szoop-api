@@ -165,11 +165,27 @@ export function serviceNames(booking: Booking) {
   return names.length || !booking.planTitle ? names : [booking.planTitle];
 }
 
-/** On Demand is general help by the hour, so any approved agent can take it. */
-export function hasSkillFor(booking: Booking, keywords: string[]) {
+/** The skill a bathroom job needs; no other skill (or On Demand) covers it. */
+export const BATHROOM_SKILL_CODE = 'bathroom_cleaning';
+const BATHROOM_WORDS = /bathroom|washroom|toilet|restroom/i;
+
+export function isBathroomJob(booking: Booking) {
+  return serviceNames(booking).some((name) => BATHROOM_WORDS.test(name));
+}
+
+/**
+ * Bathroom jobs need the Bathroom Cleaning skill itself (a home cleaner's "cleaning"
+ * keyword would otherwise match them). Otherwise On Demand is general help by the
+ * hour, so any approved agent can take it.
+ */
+export function hasSkillFor(
+  booking: Booking,
+  skills: { keywords: string[]; skillCodes: string[] },
+) {
+  if (isBathroomJob(booking)) return skills.skillCodes.includes(BATHROOM_SKILL_CODE);
   return (
     booking.planType === 'HOURLY' ||
-    serviceNames(booking).some((name) => matchesSkill(name, keywords))
+    serviceNames(booking).some((name) => matchesSkill(name, skills.keywords))
   );
 }
 
