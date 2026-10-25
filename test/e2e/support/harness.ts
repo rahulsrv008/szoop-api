@@ -154,9 +154,9 @@ export class Factory {
     return service;
   }
 
-  async skill(name: string, keywords: string) {
+  async skill(name: string, keywords: string, code?: string) {
     return this.h.repo(E.Skill).save({
-      code: `${name.toLowerCase().replace(/\W+/g, '-')}-${this.next()}`,
+      code: code ?? `${name.toLowerCase().replace(/\W+/g, '-')}-${this.next()}`,
       name,
       category: 'home',
       trainingTrack: 'basic',

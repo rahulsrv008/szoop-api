@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { Agent, AgentSkill, Skill } from 'src/database/entities';
+import { Agent, AgentSkill, Booking, Skill } from 'src/database/entities';
+import { BATHROOM_SKILL_CODE, isBathroomJob } from 'src/dispatch/dispatch.rules';
 import { AgentContextService } from '../shared/agent-context.service';
 import {
   BOOSTED_SERVICE_RADIUS_KM,
@@ -123,11 +124,24 @@ export class AgentSkillsService {
     return contexts;
   }
 
+  /**
+   * Whether the agent may hold this booking. Only bathroom jobs are gated here:
+   * they need the Bathroom Cleaning skill, whatever else the agent does.
+   */
+  async canTake(agentId: string, booking: Booking) {
+    if (!isBathroomJob(booking)) return true;
+    const { skillCodes } = await this.matchingContext(agentId);
+    return skillCodes.includes(BATHROOM_SKILL_CODE);
+  }
+
+  /** Adds catalog skills the table doesn't have yet; existing rows are left as they are. */
   private async ensureCatalog() {
-    const count = await this.skillRepo.count();
-    if (count > 0) return;
+    const existing = await this.skillRepo.find({ select: ['code'] });
+    const have = new Set(existing.map((skill) => skill.code));
+    const missing = SKILL_CATALOG.filter((skill) => !have.has(skill.code));
+    if (!missing.length) return;
     await this.skillRepo.save(
-      SKILL_CATALOG.map((skill) =>
+      missing.map((skill) =>
         this.skillRepo.create({
           code: skill.code,
           name: skill.name,
@@ -165,5 +179,6 @@ function toMatchingContext(agent: Agent | null, rows: AgentSkill[]) {
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean),
     ),
+    skillCodes: rows.map((row) => row.skill.code),
   };
 }

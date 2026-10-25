@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -53,8 +54,10 @@ import { CompleteAgentBookingDto } from './dto/complete-booking.dto';
 import { OnTheWayDto } from './dto/on-the-way.dto';
 import { EnhancedBookingService } from './enhanced-booking.service';
 
-const LIST_RELATIONS = ['items', 'items.service', 'address', 'customer'];
-const DETAIL_RELATIONS = [...LIST_RELATIONS, 'customer.user', 'serviceArea'];
+const LIST_RELATIONS = ['items', 'items.service', 'address', 'customer', 'customer.user'];
+const DETAIL_RELATIONS = [...LIST_RELATIONS, 'serviceArea'];
+/** While the agent holds a job they can call the customer (list and detail alike). */
+const CALLABLE_STATUSES: Booking['status'][] = ['accepted', 'arriving', 'ongoing'];
 
 /** Default share of booking revenue paid to the agent when no payout is configured. */
 const DEFAULT_PAYOUT_PERCENT = 60;
@@ -206,7 +209,7 @@ export class AgentBookingsService {
       if (!isDispatchReady(booking)) return false;
       if (!due.has(booking.id)) return false;
       if (offers.has(booking.id)) return true;
-      if (!hasSkillFor(booking, match.keywords)) return false;
+      if (!hasSkillFor(booking, match)) return false;
       if (booking.serviceAreaId && zoneSet.has(booking.serviceAreaId)) return true;
       const km = distanceKm(origin, booking.address);
       return km !== null && km <= match.serviceRadiusKm;
@@ -294,7 +297,10 @@ export class AgentBookingsService {
   async accept(userId: string, bookingId: string, dto: OnTheWayDto = {}) {
     const agent = await this.context.requireApprovedAgent(userId);
 
-    const target = await this.bookingRepo.findOne({ where: { id: bookingId } });
+    const target = await this.bookingRepo.findOne({
+      where: { id: bookingId },
+      relations: ['items', 'items.service'],
+    });
     if (!target) throw new NotFoundException('Booking not found');
     // A retry after a slow first attempt: the job is already this agent's.
     if (target.agentId === agent.id && target.status !== 'cancelled' && target.status !== 'expired') {
@@ -307,6 +313,9 @@ export class AgentBookingsService {
     const due = await this.eligibility.nextStarts([target]);
     if (!due.has(target.id)) {
       throw new ConflictException('This job has expired');
+    }
+    if (!(await this.skills.canTake(agent.id, target))) {
+      throw new ForbiddenException('Only partners with the Bathroom Cleaning skill can take this job');
     }
     await this.assertFitsSchedule(agent.id, target);
 
@@ -836,6 +845,10 @@ export class AgentBookingsService {
       services: serviceNames(booking),
       address: this.toAddress(booking.address, isMine),
       customerFirstName: booking.customer?.firstName ?? null,
+      customerMobile:
+        isMine && CALLABLE_STATUSES.includes(booking.status)
+          ? (booking.customer?.user?.mobile ?? null)
+          : null,
       isAssignedToMe: isMine,
       paymentMode: booking.paymentMode,
       paymentStatus: booking.paymentStatus,
