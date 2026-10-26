@@ -12,6 +12,7 @@ import { AgentRatingsModule } from './ratings/ratings.module';
 import { AgentNotificationsModule } from './notifications/notifications.module';
 import { AgentSupportModule } from './support/support.module';
 import { AgentSkillsModule } from './skills/skills.module';
+import { AgentReferralsModule } from './referrals/referrals.module';
 
 /** Agent Mobile App — everything under /api/v1/agent/*. */
 @Module({
@@ -29,6 +30,7 @@ import { AgentSkillsModule } from './skills/skills.module';
     AgentRatingsModule,
     AgentNotificationsModule,
     AgentSupportModule,
+    AgentReferralsModule,
   ],
 })
 export class AgentModule {}

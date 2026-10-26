@@ -8,6 +8,7 @@ import {
   JoinColumn,
   OneToMany,
   ManyToOne,
+  Index,
 } from 'typeorm';
 import { User } from './user';
 import { Booking } from './booking';
@@ -114,6 +115,24 @@ export class Agent {
   /** H3 res-8 cell of the registered home address; the dispatcher's fallback when the GPS fix is stale. */
   @Column({ name: 'home_h3_cell', type: 'varchar', length: 16, nullable: true })
   homeH3Cell: string | null;
+
+  /**
+   * SZ + year + 5 random characters, set on approval. Also the referral code.
+   * `update: false`: only ReferralService writes it (with SQL), so saving an
+   * agent loaded before the ID was assigned can't clear it.
+   */
+  @Index('uq_agents_employee_id', { unique: true })
+  @Column({ name: 'employee_id', type: 'varchar', length: 9, nullable: true, update: false })
+  employeeId: string | null;
+
+  /** Set once by ReferralService, when the agent signs up with someone's code. */
+  @Index('idx_agents_referred_by')
+  @Column({ name: 'referred_by_agent_id', type: 'uuid', nullable: true, update: false })
+  referredByAgentId: string | null;
+
+  @ManyToOne(() => Agent, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'referred_by_agent_id' })
+  referredBy: Agent | null;
 
   @OneToMany(() => Booking, (booking) => booking.agent)
   bookings: Booking[];

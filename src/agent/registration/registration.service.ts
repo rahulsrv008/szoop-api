@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Agent, AgentBankAccount, AgentDocument } from 'src/database/entities';
 import { AgentContextService } from '../shared/agent-context.service';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
+import { ReferralService } from 'src/common/referrals/referral.service';
 import { h3CellOf } from 'src/common/geo/geo.util';
 import { CreateAgentRegistrationDto } from './dto/create-registration.dto';
 import { UpdateAgentPersonalDetailsDto } from './dto/update-personal-details.dto';
@@ -26,11 +27,17 @@ export class AgentRegistrationService {
     private readonly bankRepo: Repository<AgentBankAccount>,
     private readonly context: AgentContextService,
     private readonly zones: ZoneResolverService,
+    private readonly referrals: ReferralService,
   ) {}
 
   async register(userId: string, dto: CreateAgentRegistrationDto) {
     const agent = await this.context.requireAgent(userId);
     this.assertEditable(agent);
+
+    // Before saving anything, so a bad code leaves the form unsubmitted.
+    if (dto.referralCode?.trim()) {
+      await this.referrals.applyCode(agent, dto.referralCode);
+    }
 
     agent.firstName = dto.firstName;
     if (dto.lastName !== undefined) agent.lastName = dto.lastName;

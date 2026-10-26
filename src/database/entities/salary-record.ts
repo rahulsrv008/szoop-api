@@ -32,6 +32,10 @@ export class SalaryRecord {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   incentive: string;
 
+  /** Referral rewards attached to this salary (agent_referral_rewards). */
+  @Column({ name: 'referral_bonus', type: 'decimal', precision: 10, scale: 2, default: 0 })
+  referralBonus: string;
+
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   deductions: string;
 

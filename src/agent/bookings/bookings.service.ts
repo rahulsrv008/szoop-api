@@ -53,6 +53,7 @@ import { StartAgentBookingDto } from './dto/start-booking.dto';
 import { CompleteAgentBookingDto } from './dto/complete-booking.dto';
 import { OnTheWayDto } from './dto/on-the-way.dto';
 import { EnhancedBookingService } from './enhanced-booking.service';
+import { ReferralRewardsService } from 'src/common/referrals/referral-rewards.service';
 
 const LIST_RELATIONS = ['items', 'items.service', 'address', 'customer', 'customer.user'];
 const DETAIL_RELATIONS = [...LIST_RELATIONS, 'serviceArea'];
@@ -103,6 +104,7 @@ export class AgentBookingsService {
     private readonly eligibility: EligibilityService,
     private readonly dispatch: DispatchService,
     private readonly wallet: WalletService,
+    private readonly referralRewards: ReferralRewardsService,
   ) {}
 
   async list(userId: string, query: ListAgentBookingsDto) {
@@ -536,7 +538,11 @@ export class AgentBookingsService {
     }
 
     const finishedEarly = await this.finishCurrentVisit(booking, userId, dto.notes);
-    if (finishedEarly) return finishedEarly;
+    if (finishedEarly) {
+      // A finished visit counts as a job towards a referral.
+      await this.referralRewards.onJobCompleted(agent.id);
+      return finishedEarly;
+    }
 
     // Claimed with a conditional update, so two calls at once can't both complete it.
     const endTime = toTimeString(new Date());
@@ -562,6 +568,7 @@ export class AgentBookingsService {
     }
 
     const earning = await this.recordEarning(agent.id, booking);
+    await this.referralRewards.onJobCompleted(agent.id);
 
     await this.notifyCustomer(booking, {
       title: 'Service completed',

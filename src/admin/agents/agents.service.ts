@@ -20,6 +20,8 @@ import { NotificationDispatchService } from 'src/common/services/notification-di
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
+import { ReferralService } from 'src/common/referrals/referral.service';
+import { formatEmployeeId, normalizeEmployeeId } from 'src/common/referrals/employee-id';
 import { ListAdminAgentsDto } from './dto/list-agents.dto';
 import { ApproveAdminAgentDto } from './dto/approve-agent.dto';
 import { AssignAdminAgentZonesDto } from './dto/assign-agent-zones.dto';
@@ -31,6 +33,7 @@ import { todayString } from 'src/agent/shared/date.util';
 interface AgentListRow {
   agentId: string;
   userId: string;
+  employeeId: string | null;
   firstName: string;
   lastName: string | null;
   mobile: string;
@@ -68,6 +71,7 @@ export class AdminAgentsService {
     private readonly notifications: NotificationDispatchService,
     private readonly zones: ZoneResolverService,
     private readonly access: AdminAccessService,
+    private readonly referrals: ReferralService,
   ) {}
 
   async list(query: ListAdminAgentsDto) {
@@ -81,6 +85,7 @@ export class AdminAgentsService {
     )
       .select('agent.id', 'agentId')
       .addSelect('agent.userId', 'userId')
+      .addSelect('agent.employeeId', 'employeeId')
       .addSelect('agent.firstName', 'firstName')
       .addSelect('agent.lastName', 'lastName')
       .addSelect('user.mobile', 'mobile')
@@ -144,6 +149,7 @@ export class AdminAgentsService {
     return paginated(
       rows.map((row) => ({
         agentId: row.agentId,
+        employeeId: formatEmployeeId(row.employeeId),
         name: this.fullName(row.firstName, row.lastName),
         mobile: row.mobile,
         status: row.status,
@@ -175,6 +181,7 @@ export class AdminAgentsService {
       monthEarnings,
       lifetimeEarnings,
       recentBookings,
+      referredBy,
     ] = await Promise.all([
       this.documentRepo.find({
         where: { agentId: id },
@@ -213,11 +220,25 @@ export class AdminAgentsService {
         order: { bookingDate: 'DESC', startTime: 'DESC' },
         take: 10,
       }),
+      agent.referredByAgentId
+        ? this.agentRepo.findOne({
+            where: { id: agent.referredByAgentId },
+            select: ['id', 'firstName', 'lastName', 'employeeId'],
+          })
+        : null,
     ]);
 
     return {
       agentId: agent.id,
       userId: agent.userId,
+      employeeId: formatEmployeeId(agent.employeeId),
+      referredBy: referredBy
+        ? {
+            agentId: referredBy.id,
+            name: this.fullName(referredBy.firstName, referredBy.lastName),
+            employeeId: formatEmployeeId(referredBy.employeeId),
+          }
+        : null,
       mobile: agent.user.mobile,
       email: agent.user.email,
       isUserActive: agent.user.isActive,
@@ -321,6 +342,7 @@ export class AdminAgentsService {
     agent.status = 'ACTIVE';
     if (!agent.joiningDate) agent.joiningDate = todayString();
     await this.agentRepo.save(agent);
+    agent.employeeId = await this.referrals.assignEmployeeId(agent.id);
 
     await this.notifications.toUser(agent.userId, {
       app: 'agent',
@@ -343,6 +365,7 @@ export class AdminAgentsService {
         joiningDate: agent.joiningDate,
         homeZoneId: agent.homeZoneId,
         serviceAreas: agent.serviceAreas,
+        employeeId: agent.employeeId,
         remarks: dto.remarks ?? null,
       },
     });
@@ -572,10 +595,12 @@ export class AdminAgentsService {
     query: ListAdminAgentsDto,
   ) {
     if (query.search) {
+      // Employee IDs match however they're typed: "sz26-k7m", "SZ26K7M".
+      const idSearch = normalizeEmployeeId(query.search);
       qb.andWhere(
         `(agent.firstName ILIKE :search OR agent.lastName ILIKE :search
-          OR user.mobile ILIKE :search)`,
-        { search: `%${query.search.trim()}%` },
+          OR user.mobile ILIKE :search${idSearch ? ' OR agent.employeeId LIKE :idSearch' : ''})`,
+        { search: `%${query.search.trim()}%`, idSearch: `%${idSearch}%` },
       );
     }
     if (query.approvalStatus) {
@@ -626,6 +651,7 @@ export class AdminAgentsService {
   private statusResponse(agent: Agent, message: string) {
     return {
       agentId: agent.id,
+      employeeId: formatEmployeeId(agent.employeeId),
       status: agent.status,
       approvalStatus: agent.approvalStatus,
       joiningDate: agent.joiningDate,

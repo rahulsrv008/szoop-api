@@ -62,6 +62,7 @@ Never limited: `/health`, `/api/v1/health`, the Razorpay webhook (its signature 
 | `AGENT_LOCATION` | agent `POST location` | 30 / min | account |
 | `AGENT_DOCUMENT` | agent `POST documents` | 20 / hour | account |
 | `CITY_WAITLIST` | customer `serviceability/notify` | 10 / hour | account |
+| `REFERRAL_VALIDATE` | agent `GET referrals/validate/:code` | 30 / hour | account |
 
 After going over a limit, the client stays blocked for one window (`blockDuration` defaults to the window length).
 
@@ -85,6 +86,8 @@ Also in `otp.service.ts`:
 **Admin login, per email:** 10 attempts per 15 minutes, then blocked for 15 minutes (`ADMIN_LOGIN_PER_EMAIL` in `rate-limit.rules.ts`). Checked before bcrypt, so floods stay cheap. Successful logins count too; real admins don't log in 10 times in 15 minutes.
 
 **"Notify me":** at most 10 cities per customer (`CITY_WAITLIST_MAX_CITIES`), so made-up city names can't flood the waitlist.
+
+**Referral code check:** 30 per hour is plenty for someone typing a code on the signup form, and keeps anyone from guessing their way through the ~28M codes per year.
 
 ---
 

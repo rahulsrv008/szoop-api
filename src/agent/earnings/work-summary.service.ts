@@ -259,6 +259,7 @@ function toSalary(row: SalaryRecord) {
     year: row.year,
     fixedSalary: Number(row.fixedSalary),
     incentive: Number(row.incentive),
+    referralBonus: Number(row.referralBonus),
     deductions: Number(row.deductions),
     netSalary: Number(row.netSalary),
     status: row.status,
