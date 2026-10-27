@@ -1,8 +1,10 @@
 import 'src/config/timezone';
-import 'dotenv/config';
+import { loadEnvFiles } from 'src/config/env';
 import * as bcrypt from 'bcryptjs';
 import { AppDataSource } from 'src/data-source';
 import { Admin } from 'src/database/entities';
+
+loadEnvFiles();
 
 /**
  * Creates (or resets the password of) an Admin Web login.

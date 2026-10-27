@@ -25,6 +25,8 @@ yarn-error.log*
 
 # dotenv — keep secrets local
 .env
+.env.development
+.env.uat
 .env.stg
 .env.production
 .env.ppe
@@ -32,6 +34,10 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 .env.local
+!.env.example
+!.env.development.example
+!.env.uat.example
+!.env.production.example
 .vercel
 
 .temp

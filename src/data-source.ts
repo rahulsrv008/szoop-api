@@ -2,7 +2,9 @@ import './config/timezone';
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import * as path from 'path';
-import 'dotenv/config';
+import { loadEnvFiles } from './config/env';
+
+loadEnvFiles();
 
 const env = process.env;
 

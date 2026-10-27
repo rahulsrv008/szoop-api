@@ -1,36 +1,47 @@
 import { existsSync } from 'fs';
 import { config as loadEnv } from 'dotenv';
 
-export type AppEnv = 'development' | 'staging' | 'production' | 'test';
+export type AppEnv = 'development' | 'uat' | 'production' | 'test';
+
+const FILE_FOR: Record<Exclude<AppEnv, 'test'>, string> = {
+  development: '.env.development',
+  uat: '.env.uat',
+  production: '.env.production',
+};
 
 export function resolveAppEnv(): AppEnv {
-  const raw = (process.env.NODE_ENV || 'development').toLowerCase();
-  if (raw === 'stg' || raw === 'stage') return 'staging';
-  if (raw === 'prod') return 'production';
-  if (raw === 'staging' || raw === 'production' || raw === 'test') return raw;
+  const raw = (process.env.APP_ENV || process.env.NODE_ENV || 'development').toLowerCase();
+  if (raw === 'dev') return 'development';
+  if (raw === 'stg' || raw === 'stage' || raw === 'staging' || raw === 'uat') return 'uat';
+  if (raw === 'prod' || raw === 'production') return 'production';
+  if (raw === 'test' || raw === 'development' || raw === 'uat') return raw;
   return 'development';
 }
 
 export function isDeployedEnv(env: AppEnv = resolveAppEnv()): boolean {
-  return env === 'staging' || env === 'production';
+  return env === 'uat' || env === 'production';
 }
 
-/** Load `.env` then overlay `.env.stg` / `.env.production` when present. Platform env vars still win if already set. */
+/** Load `.env` then overlay `.env.development` / `.env.uat` / `.env.production`. Platform env vars still win if already set, except overlays override the base file. */
 export function loadEnvFiles(): AppEnv {
-  const appEnv = resolveAppEnv();
   if (existsSync('.env')) {
     loadEnv({ path: '.env' });
   }
-  const overlay =
-    appEnv === 'staging'
-      ? '.env.stg'
-      : appEnv === 'production'
-        ? '.env.production'
-        : '';
-  if (overlay && existsSync(overlay)) {
-    loadEnv({ path: overlay, override: true });
+  const requested = resolveAppEnv();
+  if (requested !== 'test') {
+    const overlay = FILE_FOR[requested];
+    const aliases = requested === 'uat' ? [overlay, '.env.stg'] : [overlay];
+    for (const file of aliases) {
+      if (existsSync(file)) {
+        loadEnv({ path: file, override: true });
+        break;
+      }
+    }
   }
-  process.env.NODE_ENV = appEnv;
+  const appEnv = resolveAppEnv();
+  process.env.APP_ENV = appEnv;
+  process.env.NODE_ENV =
+    appEnv === 'development' ? 'development' : appEnv === 'test' ? 'test' : 'production';
   return appEnv;
 }
 
@@ -50,7 +61,7 @@ export function validateEnv(appEnv: AppEnv = resolveAppEnv()): void {
   }
   if (missing.length) {
     throw new Error(
-      `Missing required env: ${missing.join(', ')}. Copy .env.stg.example to .env.stg or set them in the host.`,
+      `Missing required env: ${missing.join(', ')}. Copy .env.${appEnv === 'uat' ? 'uat' : appEnv}.example and fill values.`,
     );
   }
 
@@ -59,14 +70,14 @@ export function validateEnv(appEnv: AppEnv = resolveAppEnv()): void {
   const jwt = process.env.JWT_SECRET?.trim() ?? '';
   if (WEAK_JWT.includes(jwt) || jwt.length < 24) {
     throw new Error(
-      'JWT_SECRET is too weak for staging/production. Set a long random secret.',
+      'JWT_SECRET is too weak for uat/production. Set a long random secret.',
     );
   }
 
   const origins = process.env.ALLOWED_ORIGINS?.trim();
   if (!origins) {
     throw new Error(
-      'ALLOWED_ORIGINS is required in staging/production (comma-separated frontend URLs).',
+      'ALLOWED_ORIGINS is required in uat/production (comma-separated frontend URLs).',
     );
   }
 
@@ -82,6 +93,6 @@ export function validateEnv(appEnv: AppEnv = resolveAppEnv()): void {
   }
 
   if ((process.env.DB_SYNC ?? '').toLowerCase() === 'true') {
-    throw new Error('DB_SYNC must be false in staging/production. Apply sql/001_full_schema.sql instead.');
+    throw new Error('DB_SYNC must be false in uat/production. Apply sql/001_full_schema.sql instead.');
   }
 }
