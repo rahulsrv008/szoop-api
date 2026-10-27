@@ -25,6 +25,7 @@ import { Rating } from './rating';
  * finding → paid → accepted → arriving → ongoing → completed
  * cancelled can happen before start
  * expired: no agent was assigned before the slot passed (system-set, never by the customer)
+ * cancelled can happen before start; expired when no agent took a paid job in time
  */
 export type BookingStatus =
   | 'finding'
@@ -35,6 +36,16 @@ export type BookingStatus =
   | 'completed'
   | 'cancelled'
   | 'expired';
+
+/** INSTANT: On Demand "Right now". SCHEDULED: a slot the customer picked, or a plan. */
+export type BookingMode = 'INSTANT' | 'SCHEDULED';
+
+/**
+ * PREPAID: paid online before it is confirmed. AFTER_SERVICE: the online
+ * payment failed, so the customer confirmed it to pay by the end of the job
+ * (in their app, or by scanning the QR the agent shows). Single visits only.
+ */
+export type PaymentMode = 'PREPAID' | 'AFTER_SERVICE';
 
 @Entity('bookings')
 export class Booking {
@@ -107,6 +118,12 @@ export class Booking {
   @Index('idx_bookings_status')
   @Column({ type: 'varchar', length: 30, default: 'finding' })
   status: BookingStatus;
+
+  @Column({ name: 'booking_mode', type: 'varchar', length: 20, default: 'SCHEDULED' })
+  bookingMode: BookingMode;
+
+  @Column({ name: 'payment_mode', type: 'varchar', length: 20, default: 'PREPAID' })
+  paymentMode: PaymentMode;
 
   @Column({ name: 'start_otp', type: 'varchar', length: 20, nullable: true })
   startOtp: string | null;

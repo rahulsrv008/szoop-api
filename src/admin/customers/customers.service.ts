@@ -16,6 +16,7 @@ import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
+import { WalletService } from 'src/common/services/wallet.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminCustomersDto } from './dto/list-customers.dto';
 import { UpdateAdminCustomerDto } from './dto/update-customer.dto';
@@ -29,6 +30,7 @@ interface CustomerListRow {
   mobile: string;
   email: string | null;
   isActive: boolean;
+  deletedAt: Date | null;
   totalBookings: number;
   lastBookingDate: string | null;
   createdAt: Date;
@@ -50,6 +52,7 @@ export class AdminCustomersService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
     private readonly zones: ZoneResolverService,
+    private readonly wallet: WalletService,
     private readonly access: AdminAccessService,
   ) {}
 
@@ -70,6 +73,7 @@ export class AdminCustomersService {
       .addSelect('user.mobile', 'mobile')
       .addSelect('user.email', 'email')
       .addSelect('user.isActive', 'isActive')
+      .addSelect('user.deletedAt', 'deletedAt')
       .addSelect('customer.createdAt', 'createdAt')
       .addSelect('customer.homeZoneId', 'homeZoneId')
       .addSelect('COUNT(booking.id)::int', 'totalBookings')
@@ -106,6 +110,7 @@ export class AdminCustomersService {
         mobile: row.mobile,
         email: row.email,
         isActive: row.isActive,
+        deletedAt: row.deletedAt,
         totalBookings: Number(row.totalBookings),
         lastBookingDate: row.lastBookingDate,
         createdAt: row.createdAt,
@@ -119,7 +124,7 @@ export class AdminCustomersService {
   async detail(id: string) {
     const customer = await this.requireCustomer(id);
 
-    const [addresses, statusRows, spent, recentBookings] = await Promise.all([
+    const [addresses, statusRows, spent, recentBookings, wallet] = await Promise.all([
       this.addressRepo.find({
         where: { customerId: id },
         relations: ['serviceArea'],
@@ -143,6 +148,7 @@ export class AdminCustomersService {
         order: { bookingDate: 'DESC', startTime: 'DESC' },
         take: 10,
       }),
+      this.wallet.statement(id, { page: 1, limit: 10 }),
     ]);
 
     const byStatus = statusRows.reduce<Record<string, number>>((acc, row) => {
@@ -156,6 +162,7 @@ export class AdminCustomersService {
       mobile: customer.user.mobile,
       email: customer.user.email,
       isActive: customer.user.isActive,
+      deletedAt: customer.user.deletedAt,
       firstName: customer.firstName,
       lastName: customer.lastName,
       name: this.fullName(customer.firstName, customer.lastName),
@@ -197,6 +204,7 @@ export class AdminCustomersService {
         paymentStatus: booking.paymentStatus,
         totalAmount: Number(booking.totalAmount),
       })),
+      wallet: { balance: wallet.balance, recentTransactions: wallet.items },
     };
   }
 
@@ -254,6 +262,7 @@ export class AdminCustomersService {
     await this.userRepo.save(customer.user);
 
     await this.notifications.toUser(customer.userId, {
+      app: 'customer',
       title: 'Account blocked',
       message: dto.reason
         ? `Your ClearIt account has been blocked. Reason: ${dto.reason}`
@@ -283,9 +292,11 @@ export class AdminCustomersService {
     const wasActive = customer.user.isActive;
 
     customer.user.isActive = true;
+    customer.user.deletedAt = null;
     await this.userRepo.save(customer.user);
 
     await this.notifications.toUser(customer.userId, {
+      app: 'customer',
       title: 'Account restored',
       message: 'Your ClearIt account has been unblocked. Welcome back!',
       type: 'account',

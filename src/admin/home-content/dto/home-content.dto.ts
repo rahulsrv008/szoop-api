@@ -88,6 +88,18 @@ class HighlightsField {
   highlights?: HomeHighlightDto[];
 
   @ApiPropertyOptional({
+    type: [String],
+    example: ['Bathrooms and washrooms'],
+    description: 'What the service does not cover; shown in its description and at checkout',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @IsString({ each: true })
+  @MaxLength(120, { each: true })
+  exclusions?: string[];
+
+  @ApiPropertyOptional({
     type: [HomePricingTierDto],
     description: 'Durations (On Demand) or shifts (monthly plans) the customer picks from',
   })
@@ -277,3 +289,165 @@ export class CreateHomePopularItemDto {
 export class UpdateHomePopularItemDto extends PartialType(
   CreateHomePopularItemDto,
 ) {}
+
+export class HomeBannerDto {
+  @ApiProperty()
+  @IsString()
+  @MaxLength(40)
+  id: string;
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(40)
+  kicker: string;
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(40)
+  headline: string;
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(80)
+  title: string;
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(160)
+  sub: string;
+
+  @ApiProperty({ example: '#6B21A8' })
+  @IsString()
+  @MaxLength(20)
+  color: string;
+
+  @ApiProperty({ enum: ['express', 'cook'] })
+  @IsIn(['express', 'cook'])
+  opens: 'express' | 'cook';
+}
+
+export class HomeTrustDto {
+  @ApiProperty({ example: 'shield-checkmark' })
+  @IsString()
+  @MaxLength(40)
+  icon: string;
+
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  label: string;
+}
+
+export class HomeStepDto {
+  @ApiProperty({ example: '1' })
+  @IsString()
+  @MaxLength(4)
+  n: string;
+
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  title: string;
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(80)
+  body: string;
+}
+
+export class HomeTabDto {
+  @ApiProperty({ example: 'quick' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  id: string;
+
+  @ApiProperty({ example: 'Quick' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(24)
+  label: string;
+
+  @ApiProperty({ example: 'flash', description: 'Ionicons name' })
+  @IsString()
+  @MaxLength(40)
+  icon: string;
+
+  @ApiProperty({ example: '#6B21A8' })
+  @IsString()
+  @MaxLength(20)
+  color: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Home category ids shown in this tab; empty = match by tab id (quick/monthly/salon)',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsUUID('all', { each: true })
+  categoryIds?: string[];
+}
+
+export class UpdateHomeScreenDto {
+  @ApiPropertyOptional({ type: [HomeTabDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @ValidateNested({ each: true })
+  @Type(() => HomeTabDto)
+  tabs?: HomeTabDto[];
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(80)
+  searchPlaceholder: string;
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(80)
+  gridTitle: string;
+
+  @ApiProperty({ type: [HomeBannerDto] })
+  @IsArray()
+  @ArrayMaxSize(6)
+  @ValidateNested({ each: true })
+  @Type(() => HomeBannerDto)
+  banners: HomeBannerDto[];
+
+  @ApiProperty({ type: [HomeTrustDto] })
+  @IsArray()
+  @ArrayMaxSize(8)
+  @ValidateNested({ each: true })
+  @Type(() => HomeTrustDto)
+  trust: HomeTrustDto[];
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(80)
+  howTitle: string;
+
+  @ApiProperty({ type: [HomeStepDto] })
+  @IsArray()
+  @ArrayMaxSize(4)
+  @ValidateNested({ each: true })
+  @Type(() => HomeStepDto)
+  howSteps: HomeStepDto[];
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(80)
+  bottomTitle: string;
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(120)
+  bottomSub: string;
+
+  @ApiProperty()
+  @IsString()
+  @MaxLength(24)
+  bottomButton: string;
+}

@@ -11,17 +11,26 @@ export const ROUTES = {
   SWAGGER: process.env.SWAGGER_ROUTE || 'api',
   HEALTH: process.env.HEALTH_CONTROLLER || 'health',
 
+  /** Machine-to-machine routes (cron), never called by the apps. */
+  INTERNAL: {
+    DISPATCH: 'internal/dispatch',
+  },
+
   CUSTOMER: {
     AUTH: 'customer/auth',
     PROFILE: 'customer/profile',
+    ACCOUNT_DELETION: 'customer/account-deletion',
     ADDRESSES: 'customer/addresses',
     SERVICES: 'customer/services',
     BOOKINGS: 'customer/bookings',
     PAYMENTS: 'customer/payments',
+    WALLET: 'customer/wallet',
     RATINGS: 'customer/ratings',
     NOTIFICATIONS: 'customer/notifications',
     SUPPORT: 'customer/support',
     HOME: 'customer/home',
+    SERVICEABILITY: 'customer/serviceability',
+    COUPONS: 'customer/coupons',
   },
 
   AGENT: {
@@ -38,9 +47,11 @@ export const ROUTES = {
     ATTENDANCE: 'agent/attendance',
     EARNINGS: 'agent/earnings',
     INCENTIVES: 'agent/incentives',
+    WORK_SUMMARY: 'agent/work-summary',
     RATINGS: 'agent/ratings',
     NOTIFICATIONS: 'agent/notifications',
     SUPPORT: 'agent/support',
+    REFERRALS: 'agent/referrals',
   },
 
   ADMIN: {
@@ -50,10 +61,12 @@ export const ROUTES = {
     CUSTOMERS: 'admin/customers',
     AGENTS: 'admin/agents',
     ATTENDANCE: 'admin/attendance',
+    MISSED_JOBS: 'admin/missed-jobs',
     SERVICES: 'admin/services',
     SERVICE_CATEGORIES: 'admin/service-categories',
     PRICING: 'admin/pricing',
     BOOKINGS: 'admin/bookings',
+    BOOKING_MONITOR: 'admin/booking-monitor',
     PAYMENTS: 'admin/payments',
     EARNINGS: 'admin/earnings',
     COUPONS: 'admin/coupons',
@@ -64,6 +77,8 @@ export const ROUTES = {
     REPORTS: 'admin/reports',
     NOTIFICATIONS: 'admin/notifications',
     SETTINGS: 'admin/settings',
+    REFERRALS: 'admin/referrals',
+    COUPON_RULES: 'admin/coupon-rules',
     HOME_CONTENT: 'admin/home-content',
     CRON: 'admin/cron',
   },

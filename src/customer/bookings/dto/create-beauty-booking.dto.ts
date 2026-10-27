@@ -22,6 +22,12 @@ export class CreateBeautyBookingDto {
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'startTime must be HH:mm' })
   startTime?: string;
 
+  @ApiPropertyOptional({ example: 'SZOOP30' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  couponCode?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

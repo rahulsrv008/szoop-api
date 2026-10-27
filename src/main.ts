@@ -1,3 +1,5 @@
+import './register-src-alias';
+import './config/timezone';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
@@ -9,7 +11,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import fs from 'fs';
 import path from 'path';
-import { IncomingMessage } from 'http';
+import { IncomingMessage, ServerResponse } from 'http';
 import { json, urlencoded } from 'express';
 import { cwd } from 'process';
 import { AppModule } from './app.module';
@@ -18,7 +20,7 @@ import { SwaggerConfig } from './config/swagger.config';
 import { isDeployedEnv, loadEnvFiles, validateEnv } from './config/env';
 import { createWinstonLoggerOptions } from './logger/logger.config';
 import { ensureLogDir, LOG_DIR } from './logger/log-paths';
-import { CustomLoggerService } from './common/utils/logger.service';
+import { CustomLoggerService } from 'src/common/utils/logger.service';
 import { ROUTES } from './app.routes';
 
 /** Boots Nest. On Vercel this returns the Express app and does not listen. */
@@ -32,16 +34,20 @@ export async function createServer(listen = !process.env.VERCEL) {
 
   if (!process.env.VERCEL) ensureLogDir();
   const customLoggerService = app.get(CustomLoggerService);
+  const deployed = isDeployedEnv(appEnv);
 
   const expressApp = app.getHttpAdapter().getInstance() as {
     set: (key: string, value: unknown) => void;
   };
-  expressApp.set('trust proxy', process.env.TRUST_PROXY === 'false' ? false : 1);
+  expressApp.set('trust proxy', trustProxySetting(process.env.TRUST_PROXY));
 
   app.use(
     helmet({
       contentSecurityPolicy: false,
       crossOriginEmbedderPolicy: false,
+      hsts: deployed
+        ? { maxAge: 15552000, includeSubDomains: true }
+        : false,
     }),
   );
   app.use(compression());
@@ -52,7 +58,12 @@ export async function createServer(listen = !process.env.VERCEL) {
         flags: 'a',
       });
   app.use(
-    morgan(process.env.MORGAN_FORMAT || 'combined', { stream: logStream }),
+    morgan(process.env.MORGAN_FORMAT || 'combined', {
+      stream: logStream,
+      // Rate-limited requests are counted in the per-minute "429 summary" log
+      // instead; during a flood one line per request would swamp the logs.
+      skip: (_req, res) => res.statusCode === 429,
+    }),
   );
 
   app.use(
@@ -94,7 +105,6 @@ export async function createServer(listen = !process.env.VERCEL) {
 
   const configService = app.get(ConfigService);
   const port = Number(configService.get('PORT')) || 3000;
-  const deployed = isDeployedEnv(appEnv);
 
   const allowedOrigins = (configService.get<string>('ALLOWED_ORIGINS') ?? '')
     .split(',')
@@ -212,6 +222,45 @@ export async function createServer(listen = !process.env.VERCEL) {
   }
 }
 
+/**
+ * How many proxy hops sit in front of the app, so req.ip is the real client
+ * (rate limits key on it). Number of hops (default 1), 'false', or a list of
+ * trusted subnets such as 'loopback, 10.0.0.0/8'. See docs/rate-limiting.md.
+ */
+function trustProxySetting(raw?: string): boolean | number | string {
+  const value = (raw ?? '').trim();
+  if (!value) return 1;
+  if (value === 'false') return false;
+  // 'true' has always meant one hop here; trusting every hop would let clients spoof X-Forwarded-For.
+  if (value === 'true') return 1;
+  return /^\d+$/.test(value) ? Number(value) : value;
+}
+
 if (!process.env.VERCEL) {
   void createServer(true);
+}
+
+/** Vercel rewrite sends the real path as ?__path= so Nest still sees /health and /api/v1/... */
+function restoreVercelUrl(req: IncomingMessage) {
+  const raw = req.url || '/';
+  const qIndex = raw.indexOf('?');
+  if (qIndex === -1) return;
+  const params = new URLSearchParams(raw.slice(qIndex + 1));
+  const nested = params.get('__path');
+  if (!nested) return;
+  params.delete('__path');
+  const qs = params.toString();
+  req.url = qs ? `${nested}?${qs}` : nested;
+}
+
+let vercelServer: Promise<(req: IncomingMessage, res: ServerResponse) => unknown> | null = null;
+
+/** Default export so Vercel can use src/main.js or dist/main.js as the function entry. */
+export default async function handler(req: IncomingMessage, res: ServerResponse) {
+  restoreVercelUrl(req);
+  if (!vercelServer) {
+    vercelServer = createServer(false) as Promise<(req: IncomingMessage, res: ServerResponse) => unknown>;
+  }
+  const server = await vercelServer;
+  return server(req, res);
 }

@@ -40,4 +40,13 @@ export class CreateAgentRegistrationDto {
   @IsString()
   @Matches(MEDIA_REF_REGEX, { message: MEDIA_REF_MESSAGE })
   profileImage?: string;
+
+  @ApiPropertyOptional({
+    example: 'SZ26-K7M4P',
+    description: "Another agent's employee ID. Case, spaces and dashes are ignored.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  referralCode?: string;
 }

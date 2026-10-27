@@ -5,6 +5,8 @@ import { AgentAuth } from 'src/common/decorators/authorize.decorator';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { AgentDocumentsService } from './documents.service';
 import { UploadAgentDocumentDto } from './dto/upload-document.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('agent')
 @AgentAuth()
@@ -12,6 +14,7 @@ import { UploadAgentDocumentDto } from './dto/upload-document.dto';
 export class AgentDocumentsController {
   constructor(private readonly documentsService: AgentDocumentsService) {}
 
+  @RateLimit(RATE_LIMITS.AGENT_DOCUMENT)
   @Post()
   @ApiOperation({ summary: 'Submit a KYC document URL for verification' })
   upload(

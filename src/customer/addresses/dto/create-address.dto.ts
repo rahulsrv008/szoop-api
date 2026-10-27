@@ -44,7 +44,7 @@ export class CreateCustomerAddressDto {
 
   @ApiPropertyOptional({ example: '400607' })
   @IsOptional()
-  @Matches(PINCODE_REGEX, { message: 'pincode must be 6 digits' })
+  @Matches(PINCODE_REGEX, { message: 'Enter a valid 6-digit PIN code' })
   pincode?: string;
 
   @ApiPropertyOptional({ example: 19.2183 })

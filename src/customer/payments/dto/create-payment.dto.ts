@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsUUID } from 'class-validator';
 
 export const PAYMENT_METHODS = [
+  'UPI',
   'UPI_GPAY',
   'UPI_PHONEPE',
   'UPI_PAYTM',
@@ -9,6 +10,7 @@ export const PAYMENT_METHODS = [
   'CARD',
   'NETBANKING',
   'WALLET',
+  'RAZORPAY',
 ] as const;
 
 export class CreateCustomerPaymentDto {

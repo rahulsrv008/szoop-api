@@ -7,8 +7,17 @@ export const SKILL_CATALOG = [
     name: 'Home Cleaning',
     category: 'Home',
     trainingTrack: 'Cleaning',
-    description: 'Sweeping, mopping, dusting and bathroom wipe-down',
-    matchKeywords: 'home cleaning,cleaning,maid,mop,dust,bathroom',
+    description: 'Sweeping, mopping and dusting (bathrooms are a separate skill)',
+    matchKeywords: 'home cleaning,cleaning,maid,mop,dust',
+  },
+  {
+    // Bathroom jobs go only to agents with this skill (see BATHROOM_SKILL_CODE).
+    code: 'bathroom_cleaning',
+    name: 'Bathroom Cleaning',
+    category: 'Home',
+    trainingTrack: 'Cleaning',
+    description: 'Toilets, tiles, fittings and disinfection',
+    matchKeywords: 'bathroom,washroom,toilet',
   },
   {
     code: 'dishwashing',

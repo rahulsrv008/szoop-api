@@ -6,6 +6,8 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { PaginationQueryDto } from 'src/common/dto/pagination.dto';
 import { CustomerRatingsService } from './ratings.service';
 import { CreateCustomerRatingDto } from './dto/create-rating.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('customer')
 @CustomerAuth()
@@ -13,6 +15,7 @@ import { CreateCustomerRatingDto } from './dto/create-rating.dto';
 export class CustomerRatingsController {
   constructor(private readonly ratingsService: CustomerRatingsService) {}
 
+  @RateLimit(RATE_LIMITS.RATING)
   @Post()
   @ApiOperation({ summary: 'Rate the agent of a completed booking' })
   create(

@@ -17,6 +17,17 @@ export const SETTING_KEYS = {
   COOK_BOTH_PER_PERSON: 'cook_both_per_person',
   COOK_EXTRA_PERSON_DISCOUNT_PERCENT: 'cook_extra_person_discount_percent',
   COOK_CLEANING_MONTHLY: 'cook_cleaning_monthly',
+  CUSTOMER_HOME_SCREEN: 'customer_home_screen',
+  REFERRAL_ENABLED: 'referral_enabled',
+  REFERRAL_MAX_PER_AGENT: 'referral_max_per_agent',
+  REFERRAL_MAX_LEVELS: 'referral_max_levels',
+  REFERRAL_REWARD_TIERS: 'referral_reward_tiers',
+  REFERRAL_LEVEL_REWARDS: 'referral_level_rewards',
+  REFERRAL_MAX_EARNING: 'referral_max_earning',
+  REFERRAL_QUALIFY_JOBS: 'referral_qualify_jobs',
+  REFERRAL_JOINING_BONUS: 'referral_joining_bonus',
+  REFERRAL_ACTIVE_MIN_JOBS: 'referral_active_min_jobs',
+  REFERRAL_ACTIVE_WINDOW_DAYS: 'referral_active_window_days',
 } as const;
 
 const CACHE_TTL_MS = 30_000;

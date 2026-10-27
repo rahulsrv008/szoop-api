@@ -8,6 +8,7 @@ import {
   SalaryRecord,
 } from 'src/database/entities';
 import { AdminAccessService } from 'src/common/auth/admin-access';
+import { ReferralRewardsService } from 'src/common/referrals/referral-rewards.service';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import {
@@ -69,6 +70,7 @@ export class AdminEarningsService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
     private readonly access: AdminAccessService,
+    private readonly referralRewards: ReferralRewardsService,
   ) {}
 
   async listEarnings(query: ListAdminEarningsDto) {
@@ -375,6 +377,7 @@ export class AdminEarningsService {
       });
       if (agent) {
         await this.notifications.toUser(agent.userId, {
+          app: 'agent',
           title:
             dto.status === 'PAID' ? 'Incentive paid' : 'Incentive approved',
           message: `Your incentive of ₹${Number(incentive.incentiveAmount).toFixed(2)} for ${incentive.month}/${incentive.year} has been ${dto.status.toLowerCase()}.${
@@ -420,6 +423,7 @@ export class AdminEarningsService {
         .addSelect('salary.year', 'year')
         .addSelect('salary.fixedSalary', 'fixedSalary')
         .addSelect('salary.incentive', 'incentive')
+        .addSelect('salary.referralBonus', 'referralBonus')
         .addSelect('salary.deductions', 'deductions')
         .addSelect('salary.netSalary', 'netSalary')
         .addSelect('salary.status', 'status')
@@ -439,6 +443,7 @@ export class AdminEarningsService {
           year: number;
           fixedSalary: string;
           incentive: string;
+          referralBonus: string;
           deductions: string;
           netSalary: string;
           status: string;
@@ -457,6 +462,7 @@ export class AdminEarningsService {
         year: Number(row.year),
         fixedSalary: Number(row.fixedSalary),
         incentive: Number(row.incentive),
+        referralBonus: Number(row.referralBonus),
         deductions: Number(row.deductions),
         netSalary: Number(row.netSalary),
         status: row.status,
@@ -468,9 +474,11 @@ export class AdminEarningsService {
   }
 
   /**
-   * netSalary = fixed salary + that month's incentive - deductions, for every
-   * APPROVED agent. Existing deductions entered by an admin are preserved, and
-   * rows already APPROVED or PAID are skipped.
+   * netSalary = fixed salary + that month's incentive + referral bonus -
+   * deductions, for every APPROVED agent. The referral bonus is the agent's
+   * pending referral rewards up to the end of the month. Existing deductions
+   * entered by an admin are preserved, and rows already APPROVED or PAID are
+   * skipped.
    */
   async generateSalary(adminId: string, dto: GenerateAdminSalaryDto) {
     const fixedSalary = await this.settings.getNumber(
@@ -508,7 +516,6 @@ export class AdminEarningsService {
 
       const incentive = incentiveByAgent.get(agent.id) ?? 0;
       const deductions = existing ? Number(existing.deductions) : 0;
-      const netSalary = fixedSalary + incentive - deductions;
 
       const record =
         existing ??
@@ -521,8 +528,17 @@ export class AdminEarningsService {
       record.fixedSalary = fixedSalary.toFixed(2);
       record.incentive = incentive.toFixed(2);
       record.deductions = deductions.toFixed(2);
-      record.netSalary = netSalary.toFixed(2);
       record.status = 'PENDING';
+      // Saved first so a new record has an id to attach rewards to.
+      await this.salaryRepo.save(record);
+
+      const referralBonus = await this.referralRewards.attachToSalary(
+        this.salaryRepo.manager,
+        record,
+      );
+      const netSalary = fixedSalary + incentive + referralBonus - deductions;
+      record.referralBonus = referralBonus.toFixed(2);
+      record.netSalary = netSalary.toFixed(2);
       await this.salaryRepo.save(record);
 
       if (existing) updated += 1;
@@ -560,6 +576,7 @@ export class AdminEarningsService {
     const oldData = {
       status: salary.status,
       deductions: salary.deductions,
+      referralBonus: salary.referralBonus,
       netSalary: salary.netSalary,
     };
 
@@ -568,9 +585,17 @@ export class AdminEarningsService {
     }
     if (dto.status !== undefined) salary.status = dto.status;
 
+    // Paying the salary pays its referral rewards; rejecting it frees them
+    // for the next salary.
+    const referralBonus = await this.referralRewards.syncWithSalary(
+      this.salaryRepo.manager,
+      salary,
+    );
+    salary.referralBonus = referralBonus.toFixed(2);
     salary.netSalary = (
       Number(salary.fixedSalary) +
-      Number(salary.incentive) -
+      Number(salary.incentive) +
+      referralBonus -
       Number(salary.deductions)
     ).toFixed(2);
     await this.salaryRepo.save(salary);
@@ -582,6 +607,7 @@ export class AdminEarningsService {
       });
       if (agent) {
         await this.notifications.toUser(agent.userId, {
+          app: 'agent',
           title: salary.status === 'PAID' ? 'Salary paid' : 'Salary approved',
           message: `Your salary of ₹${Number(salary.netSalary).toFixed(2)} for ${salary.month}/${salary.year} has been ${salary.status.toLowerCase()}.${
             dto.remarks ? ` ${dto.remarks}` : ''
@@ -600,6 +626,7 @@ export class AdminEarningsService {
       newData: {
         status: salary.status,
         deductions: salary.deductions,
+        referralBonus: salary.referralBonus,
         netSalary: salary.netSalary,
         remarks: dto.remarks ?? null,
       },
@@ -612,6 +639,7 @@ export class AdminEarningsService {
       year: salary.year,
       fixedSalary: Number(salary.fixedSalary),
       incentive: Number(salary.incentive),
+      referralBonus: Number(salary.referralBonus),
       deductions: Number(salary.deductions),
       netSalary: Number(salary.netSalary),
       status: salary.status,

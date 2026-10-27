@@ -5,6 +5,7 @@ import { from, of, Observable } from 'rxjs';
 import { map, catchError } from 'rxjs/operators';
 import { appVersion } from '../common/utils/version';
 import { resolveAppEnv } from '../config/env';
+import { RateLimitStorage, RateLimitStoreStatus } from 'src/common/rate-limit/rate-limit.storage';
 
 export type HealthPayload = {
   status: 'ok' | 'degraded';
@@ -15,13 +16,18 @@ export type HealthPayload = {
   osUpTime: number;
   appUpTime: number;
   database: { dbStatus: string; dbError?: string };
+  /** Informational: a degraded rate-limit store doesn't fail readiness (limits fall back to memory). */
+  rateLimit: RateLimitStoreStatus;
 };
 
 @Injectable()
 export class HealthService {
   started = new Date();
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly rateLimits: RateLimitStorage,
+  ) {}
 
   private checkDbConnection(): Observable<{
     dbStatus: string;
@@ -55,6 +61,7 @@ export class HealthService {
         osUpTime: os.uptime(),
         appUpTime: (Date.now() - Number(this.started)) / 1000,
         database: dbInfo,
+        rateLimit: this.rateLimits.status(),
       })),
     );
   }

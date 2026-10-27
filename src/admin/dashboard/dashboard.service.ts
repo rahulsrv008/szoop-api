@@ -5,19 +5,23 @@ import {
   Admin,
   Agent,
   AgentAttendance,
+  AgentAvailability,
   AgentDocument,
   Booking,
   Customer,
   Payment,
   Rating,
+  ServiceArea,
   SupportTicket,
 } from 'src/database/entities';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { ACTIVE_STATUSES } from 'src/common/booking/booking-status';
 import { AdminDashboardQueryDto } from './dto/dashboard-query.dto';
+import { todayString } from 'src/agent/shared/date.util';
 
 /** Priorities the dashboard counts as "needs attention now". */
 const HIGH_PRIORITIES = ['HIGH', 'URGENT'];
+const LIVE_LOCATION_MAX_AGE_MS = 5 * 60 * 1000;
 
 function isoDate(value: Date) {
   return value.toISOString().slice(0, 10);
@@ -36,6 +40,8 @@ export class AdminDashboardService {
     private readonly attendanceRepo: Repository<AgentAttendance>,
     @InjectRepository(Booking)
     private readonly bookingRepo: Repository<Booking>,
+    @InjectRepository(ServiceArea)
+    private readonly serviceAreaRepo: Repository<ServiceArea>,
     @InjectRepository(Payment)
     private readonly paymentRepo: Repository<Payment>,
     @InjectRepository(Rating) private readonly ratingRepo: Repository<Rating>,
@@ -69,6 +75,142 @@ export class AdminDashboardService {
       support,
       kyc,
       team,
+    };
+  }
+
+  async liveMap() {
+    const access = this.access.current();
+    const zonesQb = this.serviceAreaRepo
+      .createQueryBuilder('area')
+      .select('area.id', 'id')
+      .addSelect('area.name', 'name')
+      .addSelect('area.city', 'city')
+      .addSelect('area.latitude', 'latitude')
+      .addSelect('area.longitude', 'longitude')
+      .addSelect('area.serviceRadiusKm', 'serviceRadiusKm')
+      .where('area.isActive = true')
+      .orderBy('area.name', 'ASC');
+
+    if (!access.unrestricted) {
+      if (!access.zoneIds.length) {
+        return { zones: [], customers: [], agents: [], generatedAt: new Date() };
+      }
+      zonesQb.andWhere('area.id IN (:...zoneIds)', {
+        zoneIds: access.zoneIds,
+      });
+    }
+
+    const zones = await zonesQb.getRawMany<{
+      id: string;
+      name: string;
+      city: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      serviceRadiusKm: number;
+    }>();
+    const customersQb = this.bookingRepo
+      .createQueryBuilder('booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
+      .innerJoin('booking.address', 'address')
+      .select('booking.id', 'bookingId')
+      .addSelect('customer.id', 'id')
+      .addSelect('booking.serviceAreaId', 'zoneId')
+      .addSelect('customer.firstName', 'firstName')
+      .addSelect('customer.lastName', 'lastName')
+      .addSelect('booking.status', 'status')
+      .addSelect('address.latitude', 'latitude')
+      .addSelect('address.longitude', 'longitude')
+      .where('booking.status IN (:...statuses)', { statuses: ACTIVE_STATUSES })
+      .andWhere('customerUser.isActive = true')
+      .andWhere('address.latitude IS NOT NULL')
+      .andWhere('address.longitude IS NOT NULL');
+    this.access.restrictZoneColumn(customersQb, 'booking.service_area_id');
+
+    const agentsQb = this.agentRepo
+      .createQueryBuilder('agent')
+      .innerJoin('agent.user', 'agentUser')
+      .innerJoin(
+        AgentAvailability,
+        'availability',
+        'availability.agent_id = agent.id AND availability.availability_date = :today AND availability.is_available = true',
+        { today: todayString() },
+      )
+      .select('agent.id', 'id')
+      .addSelect('agent.firstName', 'firstName')
+      .addSelect('agent.lastName', 'lastName')
+      .addSelect('agent.homeZoneId', 'homeZoneId')
+      .addSelect('agent.serviceAreas', 'serviceAreas')
+      .addSelect('agent.currentLocation', 'currentLocation')
+      .where('agent.status = :status', { status: 'ACTIVE' })
+      .andWhere('agent.approvalStatus = :approvalStatus', {
+        approvalStatus: 'APPROVED',
+      })
+      .andWhere('agentUser.isActive = true')
+      .andWhere('agent.currentLocation IS NOT NULL')
+      .andWhere("(agent.current_location->>'recordedAt') IS NOT NULL")
+      .andWhere("(agent.current_location->>'recordedAt')::timestamptz >= :since", {
+        since: new Date(Date.now() - LIVE_LOCATION_MAX_AGE_MS),
+      })
+      .orderBy('agent.firstName', 'ASC')
+      .addOrderBy('agent.lastName', 'ASC');
+    this.access.restrictAgent(agentsQb, 'agent');
+
+    const [customerRows, agentRows] = await Promise.all([
+      customersQb.getRawMany<{
+        bookingId: string;
+        id: string;
+        zoneId: string | null;
+        firstName: string | null;
+        lastName: string | null;
+        status: string;
+        latitude: string;
+        longitude: string;
+      }>(),
+      agentsQb.getRawMany<{
+        id: string;
+        firstName: string | null;
+        lastName: string | null;
+        homeZoneId: string | null;
+        serviceAreas: string[];
+        currentLocation: Agent['currentLocation'];
+      }>(),
+    ]);
+
+    const fullName = (firstName: string | null, lastName: string | null) =>
+      [firstName, lastName].filter(Boolean).join(' ').trim() || 'Unknown';
+
+    return {
+      zones: zones.map((zone) => ({
+        ...zone,
+        latitude: zone.latitude === null ? null : Number(zone.latitude),
+        longitude: zone.longitude === null ? null : Number(zone.longitude),
+        serviceRadiusKm: Number(zone.serviceRadiusKm),
+      })),
+      customers: customerRows.map((row) => ({
+        id: row.id,
+        bookingId: row.bookingId,
+        zoneId: row.zoneId,
+        name: fullName(row.firstName, row.lastName),
+        status: row.status,
+        latitude: Number(row.latitude),
+        longitude: Number(row.longitude),
+      })),
+      agents: agentRows.map((row) => ({
+        id: row.id,
+        name: fullName(row.firstName, row.lastName),
+        zoneIds: [
+          ...new Set(
+            [row.homeZoneId, ...(row.serviceAreas ?? [])].filter(
+              (zoneId): zoneId is string => !!zoneId,
+            ),
+          ),
+        ],
+        latitude: Number(row.currentLocation.latitude),
+        longitude: Number(row.currentLocation.longitude),
+        recordedAt: row.currentLocation.recordedAt,
+      })),
+      generatedAt: new Date(),
     };
   }
 

@@ -9,15 +9,16 @@ import {
   Agent,
   AgentLocation,
   Booking,
-  Payment,
-  PaymentStatus,
 } from 'src/database/entities';
 import { ACTIVE_STATUSES, ASSIGNABLE } from 'src/common/booking/booking-status';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
+import { BookingClosureService, couponNote } from 'src/common/booking/booking-closure.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
+import { DispatchService } from 'src/dispatch/dispatch.service';
+import { AgentSkillsService } from 'src/agent/skills/skills.service';
 import { ListAdminBookingsDto } from './dto/list-bookings.dto';
 import { AssignAdminBookingAgentDto } from './dto/assign-agent.dto';
 import { ReassignAdminBookingAgentDto } from './dto/reassign-agent.dto';
@@ -61,14 +62,15 @@ export class AdminBookingsService {
     @InjectRepository(Booking)
     private readonly bookingRepo: Repository<Booking>,
     @InjectRepository(Agent) private readonly agentRepo: Repository<Agent>,
-    @InjectRepository(Payment)
-    private readonly paymentRepo: Repository<Payment>,
     @InjectRepository(AgentLocation)
     private readonly locationRepo: Repository<AgentLocation>,
     private readonly history: BookingHistoryService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationDispatchService,
     private readonly access: AdminAccessService,
+    private readonly dispatch: DispatchService,
+    private readonly closure: BookingClosureService,
+    private readonly skills: AgentSkillsService,
   ) {}
 
   async list(query: ListAdminBookingsDto) {
@@ -267,33 +269,41 @@ export class AdminBookingsService {
 
     if (!ASSIGNABLE.includes(booking.status)) {
       throw new BadRequestException(
-        `An agent cannot be assigned while the booking is ${booking.status}`,
+        booking.status === 'finding'
+          ? 'Wait for the customer to pay before assigning an agent'
+          : `An agent cannot be assigned while the booking is ${booking.status}`,
+      );
+    }
+    if (booking.agentId) {
+      throw new BadRequestException(
+        'Booking already has an agent — use reassign-agent instead',
       );
     }
 
     const agent = await this.requireAssignableAgent(dto.agentId);
+    await this.assertCanTake(booking, agent.id);
     await this.assertNoClash(booking, agent.id);
 
     const oldData = { agentId: booking.agentId, status: booking.status };
 
     booking.agentId = agent.id;
-    if (booking.status === 'paid') {
-      await this.history.transition(booking, 'accepted', adminId, dto.remarks);
-    } else {
-      await this.bookingRepo.save(booking);
-      await this.history.record(
-        booking.id,
-        booking.status,
-        adminId,
-        dto.remarks ?? `Agent assigned by admin`,
-      );
-    }
+    await this.history.transition(
+      booking,
+      'accepted',
+      adminId,
+      dto.remarks ?? 'Agent assigned by admin',
+    );
+    // Withdraw any offers still out, so nobody else accepts into a 409.
+    await this.dispatch.onAccepted(booking.id, agent.id);
 
-    await this.notifications.toUsers([agent.userId, booking.customer.userId], {
+    // One message, sent to each app separately so neither sees the other's.
+    const assigned = {
       title: 'Agent assigned',
       message: `Booking ${booking.bookingNumber} on ${booking.bookingDate} at ${booking.startTime} is now assigned to ${this.fullName(agent.firstName, agent.lastName) ?? 'an agent'}.`,
       type: 'booking',
-    });
+    };
+    await this.notifications.toUser(agent.userId, { ...assigned, app: 'agent' });
+    await this.notifications.toUser(booking.customer.userId, { ...assigned, app: 'customer' });
 
     await this.audit.record({
       userId: adminId,
@@ -343,6 +353,7 @@ export class AdminBookingsService {
       select: ['id', 'userId', 'firstName', 'lastName'],
     });
     const agent = await this.requireAssignableAgent(dto.agentId);
+    await this.assertCanTake(booking, agent.id);
     await this.assertNoClash(booking, agent.id);
 
     const oldData = { agentId: booking.agentId, status: booking.status };
@@ -358,16 +369,19 @@ export class AdminBookingsService {
 
     if (previousAgent) {
       await this.notifications.toUser(previousAgent.userId, {
+        app: 'agent',
         title: 'Booking reassigned',
         message: `Booking ${booking.bookingNumber} has been moved to another agent. Reason: ${dto.reason}`,
         type: 'booking',
       });
     }
-    await this.notifications.toUsers([agent.userId, booking.customer.userId], {
+    const changed = {
       title: 'Agent changed',
       message: `Booking ${booking.bookingNumber} on ${booking.bookingDate} at ${booking.startTime} is now assigned to ${this.fullName(agent.firstName, agent.lastName) ?? 'a new agent'}.`,
       type: 'booking',
-    });
+    };
+    await this.notifications.toUser(agent.userId, { ...changed, app: 'agent' });
+    await this.notifications.toUser(booking.customer.userId, { ...changed, app: 'customer' });
 
     await this.audit.record({
       userId: adminId,
@@ -394,42 +408,44 @@ export class AdminBookingsService {
 
   async cancel(adminId: string, id: string, dto: CancelAdminBookingDto) {
     const booking = await this.requireBooking(id);
-    const payment = await this.paymentRepo.findOne({
-      where: { bookingId: booking.id },
-    });
-
     const oldData = {
       status: booking.status,
       paymentStatus: booking.paymentStatus,
     };
 
-    // A collected payment has to be refunded; anything unpaid is just voided.
-    const nextPaymentStatus: PaymentStatus =
-      payment?.paymentStatus === 'PAID' || booking.paymentStatus === 'PAID'
-        ? 'REFUNDED'
-        : 'VOIDED';
+    // One transaction: status, payment (REFUNDED to the wallet, or VOIDED) and history.
+    const closed = await this.closure.close(booking.id, 'cancelled', {
+      reason: 'BOOKING_CANCELLED',
+      changedBy: adminId,
+      remarks: dto.reason,
+    });
+    if (!closed) throw new NotFoundException('Booking not found');
+    const { refundedToWallet, paymentStatus, releasedCoupons } = closed;
 
-    booking.paymentStatus = nextPaymentStatus;
-    await this.history.transition(booking, 'cancelled', adminId, dto.reason);
-
-    if (payment) {
-      payment.paymentStatus = nextPaymentStatus;
-      await this.paymentRepo.save(payment);
-    }
-
-    const recipients = [booking.customer.userId];
-    if (booking.agentId) {
-      const agent = await this.agentRepo.findOne({
-        where: { id: booking.agentId },
-        select: ['id', 'userId'],
-      });
-      if (agent) recipients.push(agent.userId);
-    }
-    await this.notifications.toUsers(recipients, {
+    const cancelled = `Booking ${booking.bookingNumber} has been cancelled. Reason: ${dto.reason}`;
+    await this.notifications.toUser(booking.customer.userId, {
+      app: 'customer',
       title: 'Booking cancelled',
-      message: `Booking ${booking.bookingNumber} has been cancelled. Reason: ${dto.reason}`,
+      message:
+        (refundedToWallet > 0
+          ? `${cancelled}. ₹${refundedToWallet} has been added to your wallet.`
+          : cancelled) + couponNote(releasedCoupons),
       type: 'booking',
     });
+    if (closed.booking.agentId) {
+      const agent = await this.agentRepo.findOne({
+        where: { id: closed.booking.agentId },
+        select: ['id', 'userId'],
+      });
+      if (agent) {
+        await this.notifications.toUser(agent.userId, {
+          app: 'agent',
+          title: 'Booking cancelled',
+          message: cancelled,
+          type: 'booking',
+        });
+      }
+    }
 
     await this.audit.record({
       userId: adminId,
@@ -438,8 +454,10 @@ export class AdminBookingsService {
       entityId: booking.id,
       oldData,
       newData: {
-        status: booking.status,
-        paymentStatus: booking.paymentStatus,
+        status: closed.booking.status,
+        paymentStatus,
+        refundedToWallet,
+        releasedCoupons,
         reason: dto.reason,
       },
     });
@@ -447,12 +465,15 @@ export class AdminBookingsService {
     return {
       bookingId: booking.id,
       bookingNumber: booking.bookingNumber,
-      status: booking.status,
-      paymentStatus: booking.paymentStatus,
+      status: closed.booking.status,
+      paymentStatus,
+      refundedToWallet,
       message:
-        nextPaymentStatus === 'REFUNDED'
-          ? 'Booking cancelled and the payment marked for refund.'
-          : 'Booking cancelled and the pending payment voided.',
+        refundedToWallet > 0
+          ? `Booking cancelled and ₹${refundedToWallet} refunded to the customer's wallet.`
+          : paymentStatus === 'REFUNDED'
+            ? 'Booking cancelled and the payment marked as refunded.'
+            : 'Booking cancelled and the pending payment voided.',
     };
   }
 
@@ -467,6 +488,19 @@ export class AdminBookingsService {
       throw new BadRequestException('Agent is suspended');
     }
     return agent;
+  }
+
+  /** Bathroom jobs only go to agents with the Bathroom Cleaning skill. */
+  private async assertCanTake(booking: Booking, agentId: string) {
+    const withItems = await this.bookingRepo.findOne({
+      where: { id: booking.id },
+      relations: ['items', 'items.service'],
+    });
+    if (withItems && !(await this.skills.canTake(agentId, withItems))) {
+      throw new BadRequestException(
+        'This agent does not have the Bathroom Cleaning skill',
+      );
+    }
   }
 
   private async assertNoClash(booking: Booking, agentId: string) {

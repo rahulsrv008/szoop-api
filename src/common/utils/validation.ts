@@ -5,9 +5,16 @@ export const MOBILE_MESSAGE = 'mobile must be a valid 10-digit Indian number';
 
 export const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
-export const PINCODE_REGEX = /^\d{6}$/;
+/** Indian PIN codes never start with 0. */
+export const PINCODE_REGEX = /^[1-9]\d{5}$/;
 
-export const MEDIA_REF_REGEX = /^(https?:\/\/|data:image\/)/i;
+export const MEDIA_REF_REGEX = /^(https?:\/\/|data:image\/|file:\/\/)/i;
 
 export const MEDIA_REF_MESSAGE =
   'must be a photo from camera/gallery or an http(s) image URL';
+
+/** KYC documents can also be a PDF (the app sends Aadhaar front and back as one). */
+export const DOCUMENT_REF_REGEX = /^(https?:\/\/|data:image\/|data:application\/pdf|file:\/\/)/i;
+
+export const DOCUMENT_REF_MESSAGE =
+  'must be a photo or PDF from the app, or an http(s) URL';

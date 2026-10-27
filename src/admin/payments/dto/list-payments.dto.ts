@@ -17,7 +17,7 @@ export class ListAdminPaymentsDto extends PaginationQueryDto {
   @IsIn(PAYMENT_STATUSES)
   paymentStatus?: string;
 
-  @ApiPropertyOptional({ example: 'RAZORPAY' })
+  @ApiPropertyOptional({ example: 'UPI', description: 'UPI | CARD | NETBANKING | WALLET | RAZORPAY' })
   @IsOptional()
   @IsString()
   paymentMethod?: string;

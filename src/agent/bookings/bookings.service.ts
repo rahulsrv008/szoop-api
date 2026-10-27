@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -16,6 +17,7 @@ import {
   Repository,
 } from 'typeorm';
 import { Agent, AgentEarning, AgentLocation, Booking, BookingItem, BookingStatusHistory, BookingVisit, CustomerAddress, ServicePricing } from 'src/database/entities';
+import { BookingEtaService } from 'src/integrations/maps/booking-eta.service';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import {
@@ -23,20 +25,57 @@ import {
   SettingsService,
 } from 'src/common/services/settings.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
+import { h3CellsWithinKm } from 'src/common/geo/geo.util';
+import { DispatchService } from 'src/dispatch/dispatch.service';
+import { WalletService } from 'src/common/services/wallet.service';
+import { EligibilityService } from 'src/dispatch/eligibility.service';
+import {
+  GeoPoint,
+  LOCATION_MAX_AGE_MINUTES,
+  MAX_RELEASES_PER_WINDOW,
+  RELEASE_CUTOFF_MINUTES,
+  RELEASE_WINDOW_DAYS,
+  addressPoint,
+  agentBase,
+  agentOrigin,
+  distanceKm,
+  hasSkillFor,
+  instantSearchEndsAt,
+  isDispatchReady,
+  serviceNames,
+} from 'src/dispatch/dispatch.rules';
 import { AgentContextService } from '../shared/agent-context.service';
 import { AgentSkillsService } from '../skills/skills.service';
-import { todayString, toTimeString } from '../shared/date.util';
+import { toDateString, todayString, toTimeString } from '../shared/date.util';
 import { ListAgentBookingsDto } from './dto/list-bookings.dto';
 import { RejectAgentBookingDto } from './dto/reject-booking.dto';
 import { StartAgentBookingDto } from './dto/start-booking.dto';
 import { CompleteAgentBookingDto } from './dto/complete-booking.dto';
+import { OnTheWayDto } from './dto/on-the-way.dto';
 import { EnhancedBookingService } from './enhanced-booking.service';
+import { ReferralRewardsService } from 'src/common/referrals/referral-rewards.service';
 
-const LIST_RELATIONS = ['items', 'items.service', 'address', 'customer'];
-const DETAIL_RELATIONS = [...LIST_RELATIONS, 'customer.user', 'serviceArea'];
+const LIST_RELATIONS = ['items', 'items.service', 'address', 'customer', 'customer.user'];
+const DETAIL_RELATIONS = [...LIST_RELATIONS, 'serviceArea'];
+/** While the agent holds a job they can call the customer (list and detail alike). */
+const CALLABLE_STATUSES: Booking['status'][] = ['accepted', 'arriving', 'ongoing'];
 
 /** Default share of booking revenue paid to the agent when no payout is configured. */
 const DEFAULT_PAYOUT_PERCENT = 60;
+
+/** Cap on open jobs read per request before in-memory matching. */
+const OPEN_POOL_SCAN_LIMIT = 500;
+
+/** Open jobs older than this can't still be live: plans run at most ~30 days from their first visit. */
+const OPEN_POOL_LOOKBACK_DAYS = 35;
+
+/** Open-job coordinates are rounded to ~1 km: enough for a map pin, not enough to find the door. */
+const OPEN_JOB_COORD_DECIMALS = 2;
+
+/** The start OTP for the customer to share, when the booking has one. */
+function otpLine(booking: Booking) {
+  return booking.startOtp ? ` Share start OTP ${booking.startOtp} when they arrive.` : '';
+}
 
 @Injectable()
 export class AgentBookingsService {
@@ -55,12 +94,17 @@ export class AgentBookingsService {
     private readonly pricingRepo: Repository<ServicePricing>,
     @InjectRepository(AgentLocation)
     private readonly locationRepo: Repository<AgentLocation>,
+    private readonly bookingEta: BookingEtaService,
     private readonly context: AgentContextService,
     private readonly skills: AgentSkillsService,
     private readonly history: BookingHistoryService,
     private readonly notifications: NotificationDispatchService,
     private readonly settings: SettingsService,
     private readonly enhancedBooking: EnhancedBookingService,
+    private readonly eligibility: EligibilityService,
+    private readonly dispatch: DispatchService,
+    private readonly wallet: WalletService,
+    private readonly referralRewards: ReferralRewardsService,
   ) {}
 
   async list(userId: string, query: ListAgentBookingsDto) {
@@ -78,29 +122,25 @@ export class AgentBookingsService {
       agentId: IsNull(),
       status: 'paid',
     };
+    if (scope === 'available') {
+      // Online agents poll this, so it also keeps dispatch moving where no timer runs.
+      await this.dispatch.tickFromRequest();
+      return this.listAvailable(agent, availableWhere, query);
+    }
+
     const assignedWhere: FindOptionsWhere<Booking> = {
       ...shared,
       agentId: agent.id,
       ...(query.status ? { status: query.status } : {}),
     };
-
     const where =
-      scope === 'available'
-        ? [availableWhere]
-        : scope === 'assigned'
-          ? [assignedWhere]
-          : [assignedWhere, availableWhere];
+      scope === 'assigned' ? [assignedWhere] : [assignedWhere, availableWhere];
 
-    // Available jobs read as a queue (soonest first); own jobs as a feed.
-    const order =
-      scope === 'available'
-        ? ({ bookingDate: 'ASC', startTime: 'ASC' } as const)
-        : ({ bookingDate: 'DESC', startTime: 'DESC' } as const);
-
+    // Own jobs read as a feed (latest first).
     const [rows, total] = await this.bookingRepo.findAndCount({
       where,
       relations: LIST_RELATIONS,
-      order,
+      order: { bookingDate: 'DESC', startTime: 'DESC' },
       ...skipTake(query),
     });
 
@@ -108,13 +148,103 @@ export class AgentBookingsService {
       rows.map((booking) => this.toListItem(booking, agent.id)),
       rows,
     );
-    if (scope !== 'available') {
-      const withDistance = await this.annotateDistanceKm(agent.id, items);
-      return paginated(withDistance, total, query);
+    return paginated(
+      this.withDistanceKm(agentOrigin(agent), items, rows),
+      total,
+      query,
+    );
+  }
+
+  /**
+   * The open pool, narrowed in SQL to the agent's zones plus the H3 cells
+   * around a fresh GPS fix (or their home when the fix is stale), then matched
+   * in memory on still being due, exact distance, skills and the agent's own
+   * schedule. Jobs the dispatcher has offered to this
+   * agent are always included and listed first, with `offerExpiresAt`.
+   * Paginated after matching so `total` is real.
+   */
+  private async listAvailable(
+    agent: Agent,
+    availableWhere: FindOptionsWhere<Booking>,
+    query: ListAgentBookingsDto,
+  ) {
+    const [match, offers] = await Promise.all([
+      this.skills.matchingContext(agent.id),
+      this.dispatch.pendingOffers(agent.id),
+    ]);
+    const origin = agentBase(agent)?.point ?? null;
+    const zones = [...(agent.serviceAreas ?? []), agent.homeZoneId].filter(
+      (id): id is string => !!id,
+    );
+    const nearbyCells = origin
+      ? h3CellsWithinKm(origin.lat, origin.lng, match.serviceRadiusKm)
+      : [];
+
+    if (!availableWhere.bookingDate) {
+      const lookback = new Date();
+      lookback.setDate(lookback.getDate() - OPEN_POOL_LOOKBACK_DAYS);
+      availableWhere = { ...availableWhere, bookingDate: MoreThanOrEqual(toDateString(lookback)) };
     }
 
-    const matched = await this.filterAvailableJobs(agent, items, rows);
-    return paginated(matched, matched.length, query);
+    const where: FindOptionsWhere<Booking>[] = [];
+    if (zones.length) where.push({ ...availableWhere, serviceAreaId: In(zones) });
+    if (nearbyCells.length) {
+      where.push({ ...availableWhere, address: { h3Cell: In(nearbyCells) } });
+    }
+    if (offers.size) where.push({ ...availableWhere, id: In([...offers.keys()]) });
+    if (!where.length) return paginated([], 0, query);
+
+    // Available jobs read as a queue (soonest first).
+    const rows = await this.bookingRepo.find({
+      where,
+      relations: LIST_RELATIONS,
+      order: { bookingDate: 'ASC', startTime: 'ASC' },
+      take: OPEN_POOL_SCAN_LIMIT,
+    });
+
+    // Inside the agent's zones distance doesn't matter; outside, the H3 cells
+    // were only a superset, so the exact radius decides.
+    // An offer was already vetted by the dispatcher (possibly from further out).
+    const zoneSet = new Set(zones);
+    const due = await this.eligibility.nextStarts(rows);
+    const matched = rows.filter((booking) => {
+      if (!isDispatchReady(booking)) return false;
+      if (!due.has(booking.id)) return false;
+      if (offers.has(booking.id)) return true;
+      if (!hasSkillFor(booking, match)) return false;
+      if (booking.serviceAreaId && zoneSet.has(booking.serviceAreaId)) return true;
+      const km = distanceKm(origin, booking.address);
+      return km !== null && km <= match.serviceRadiusKm;
+    });
+    const blocked = await this.eligibility.blockedJobs(agent.id, matched);
+    const eligible = matched
+      .filter((booking) => !blocked.has(booking.id))
+      .sort((a, b) => Number(offers.has(b.id)) - Number(offers.has(a.id)));
+
+    const { skip, take } = skipTake(query);
+    const page = eligible.slice(skip, skip + take);
+    const items = await this.withSchedule(
+      page.map((booking) => this.toListItem(booking, agent.id)),
+      page,
+    );
+    // When each job stops being open, so the app can drop it without refetching:
+    // its start, or for a "Right now" job INSTANT_LATE_WINDOW_MINUTES after it.
+    // Multi-visit plans stay listed for their next visit, so they get none.
+    const instantById = new Map(
+      page.filter((booking) => booking.bookingMode === 'INSTANT').map((booking) => [booking.id, booking]),
+    );
+    const withOffers = this.withDistanceKm(origin, items, page).map((item) => {
+      const start = due.get(item.id);
+      const instant = instantById.get(item.id);
+      const expiresAt =
+        item.visitsTotal > 1 || !start ? null : instant ? instantSearchEndsAt(instant) : start;
+      return {
+        ...item,
+        offerExpiresAt: offers.get(item.id)?.toISOString() ?? null,
+        expiresAt: expiresAt?.toISOString() ?? null,
+      };
+    });
+    return paginated(withOffers, eligible.length, query);
   }
 
   async detail(userId: string, bookingId: string) {
@@ -135,7 +265,7 @@ export class AgentBookingsService {
       [this.toListItem(booking, agent.id)],
       [booking],
     );
-    const [{ distanceKm }] = await this.annotateDistanceKm(agent.id, [listItem]);
+    const km = distanceKm(agentOrigin(agent), booking.address);
 
     return {
       ...listItem,
@@ -149,7 +279,7 @@ export class AgentBookingsService {
       // Only an assigned agent gets a way to contact the customer.
       customerMobile: isMine ? (booking.customer?.user?.mobile ?? null) : null,
       address: this.toAddress(booking.address, isMine),
-      distanceKm,
+      distanceKm: km,
       items: (booking.items ?? []).map((item) => ({
         serviceId: item.serviceId,
         serviceName: item.service?.name ?? null,
@@ -160,8 +290,36 @@ export class AgentBookingsService {
     };
   }
 
-  async accept(userId: string, bookingId: string) {
+  /**
+   * Claims an open job. A "Right now" job is accepted and set off on in one
+   * step: the customer is already waiting, so there's no "accepted but not
+   * moving" state for it (the no-show rules in HeldJobsService then only
+   * have to watch for a job that's never started).
+   */
+  async accept(userId: string, bookingId: string, dto: OnTheWayDto = {}) {
     const agent = await this.context.requireApprovedAgent(userId);
+
+    const target = await this.bookingRepo.findOne({
+      where: { id: bookingId },
+      relations: ['items', 'items.service'],
+    });
+    if (!target) throw new NotFoundException('Booking not found');
+    // A retry after a slow first attempt: the job is already this agent's.
+    if (target.agentId === agent.id && target.status !== 'cancelled' && target.status !== 'expired') {
+      // The first attempt may have claimed a "Right now" job without getting as far as setting off.
+      if (target.bookingMode === 'INSTANT' && target.status === 'accepted') {
+        return this.setOff(agent, await this.requireBooking(bookingId), userId, dto);
+      }
+      return this.toStatusResponse(target);
+    }
+    const due = await this.eligibility.nextStarts([target]);
+    if (!due.has(target.id)) {
+      throw new ConflictException('This job has expired');
+    }
+    if (!(await this.skills.canTake(agent.id, target))) {
+      throw new ForbiddenException('Only partners with the Bathroom Cleaning skill can take this job');
+    }
+    await this.assertFitsSchedule(agent.id, target);
 
     // Claim the job with a conditional update so two agents can't both win it.
     const claimed = await this.bookingRepo.update(
@@ -169,13 +327,29 @@ export class AgentBookingsService {
       { agentId: agent.id },
     );
     if (!claimed.affected) {
-      const exists = await this.bookingRepo.count({ where: { id: bookingId } });
-      if (!exists) throw new NotFoundException('Booking not found');
+      const now = await this.bookingRepo.findOne({ where: { id: bookingId }, select: ['id', 'status'] });
+      if (!now) throw new NotFoundException('Booking not found');
+      if (now.status === 'expired') throw new ConflictException('This job has expired');
+      if (now.status === 'cancelled') throw new ConflictException('This job was cancelled');
       throw new ConflictException('Job already taken');
+    }
+
+    // Re-check now that the claim is visible: two near-simultaneous accepts of
+    // overlapping jobs by this agent each passed the check above. Claimed jobs
+    // count as committed, so at least one of them sees the clash and lets go.
+    try {
+      await this.assertFitsSchedule(agent.id, target);
+    } catch (err) {
+      await this.bookingRepo.update(
+        { id: bookingId, agentId: agent.id, status: 'paid' },
+        { agentId: null },
+      );
+      throw err;
     }
 
     const booking = await this.requireBooking(bookingId);
     await this.history.transition(booking, 'accepted', userId);
+    await this.dispatch.onAccepted(bookingId, agent.id);
 
     // Initialize the service checklist for this booking. Failure here must
     // never block the accept flow — the agent still gets the job either way.
@@ -188,13 +362,15 @@ export class AgentBookingsService {
       );
     }
 
+    if (booking.bookingMode === 'INSTANT') {
+      // One message for the customer: on the way, when, and the OTP to share.
+      return this.setOff(agent, booking, userId, dto);
+    }
+
     const agentName = agent.firstName || 'Your expert';
-    const otpLine = booking.startOtp
-      ? ` Share start OTP ${booking.startOtp} when they arrive.`
-      : '';
     await this.notifyCustomer(booking, {
       title: 'Expert assigned',
-      message: `${agentName} has accepted booking ${booking.bookingNumber}.${otpLine}`,
+      message: `${agentName} has accepted booking ${booking.bookingNumber}.${otpLine(booking)}`,
       type: 'booking_accepted',
     });
 
@@ -212,6 +388,7 @@ export class AgentBookingsService {
     ) {
       throw new BadRequestException('This job can no longer be rejected');
     }
+    if (isMine) await this.assertCanRelease(agent.id, booking);
 
     if (isMine) {
       // Back into the open pool: 'paid' is the pre-assignment state, and the
@@ -227,6 +404,11 @@ export class AgentBookingsService {
       userId,
       dto.reason ? `Rejected by agent: ${dto.reason}` : 'Rejected by agent',
     );
+
+    // Don't offer it to this agent again; a released job goes straight back to dispatch.
+    if (booking.status === 'paid' && !booking.agentId) {
+      await this.dispatch.onDeclined(booking.id, agent.id, isMine ? 'released' : 'declined');
+    }
 
     if (isMine) {
       await this.notifyCustomer(booking, {
@@ -244,19 +426,66 @@ export class AgentBookingsService {
     };
   }
 
-  async arrived(userId: string, bookingId: string) {
+  async arrived(userId: string, bookingId: string, dto: OnTheWayDto = {}) {
     const agent = await this.context.requireApprovedAgent(userId);
     const booking = await this.requireAssignedBooking(bookingId, agent.id);
+    return this.setOff(agent, booking, userId, dto);
+  }
 
-    await this.history.transition(booking, 'arriving', userId);
+  /** "On the way": records where the agent set off from, routes an ETA and tells the customer. */
+  private async setOff(agent: Agent, booking: Booking, userId: string, dto: OnTheWayDto) {
+    // A retry after a slow first attempt: already on the way, just refresh the ETA.
+    const alreadyOnTheWay = booking.status === 'arriving';
+    // Set off straight from accepting ("Right now"): the customer hasn't had the OTP yet.
+    const fromAccept = booking.status === 'accepted' && booking.bookingMode === 'INSTANT';
 
-    await this.notifyCustomer(booking, {
-      title: 'Agent on the way',
-      message: `${agent.firstName || 'Your agent'} is arriving for booking ${booking.bookingNumber}.`,
-      type: 'booking_arriving',
-    });
+    const origin = await this.setOffFrom(agent, booking.id, dto);
+    const destination = addressPoint(booking.address);
+    const eta =
+      origin && destination
+        ? await this.bookingEta.refresh(booking.id, origin, destination).catch((err) => {
+            this.logger.warn(`ETA for ${booking.bookingNumber} failed: ${(err as Error).message}`);
+            return null;
+          })
+        : null;
 
-    return this.toStatusResponse(booking);
+    if (!alreadyOnTheWay) {
+      await this.history.transition(booking, 'arriving', userId);
+      const name = agent.firstName || 'Your agent';
+      await this.notifyCustomer(booking, {
+        title: eta ? `Expert arriving in ~${eta.minutes} min` : 'Agent on the way',
+        message: `${
+          eta
+            ? `${name} is on the way for booking ${booking.bookingNumber} and should reach you in about ${eta.minutes} min (${eta.distanceKm} km).`
+            : `${name} is arriving for booking ${booking.bookingNumber}.`
+        }${fromAccept ? otpLine(booking) : ''}`,
+        type: 'booking_arriving',
+      });
+    }
+
+    return {
+      ...this.toStatusResponse(booking),
+      etaMinutes: eta?.minutes ?? null,
+      distanceKm: eta?.distanceKm ?? null,
+      etaSource: eta?.source ?? null,
+    };
+  }
+
+  /** The agent's position as they set off: sent with the request, else a recent GPS ping. */
+  private async setOffFrom(agent: Agent, bookingId: string, dto: OnTheWayDto) {
+    if (dto.latitude != null && dto.longitude != null) {
+      await this.locationRepo.save(
+        this.locationRepo.create({
+          agentId: agent.id,
+          bookingId,
+          latitude: dto.latitude.toFixed(7),
+          longitude: dto.longitude.toFixed(7),
+        }),
+      );
+      return { latitude: dto.latitude, longitude: dto.longitude };
+    }
+    const fix = agentOrigin(agent, LOCATION_MAX_AGE_MINUTES);
+    return fix ? { latitude: fix.lat, longitude: fix.lng } : null;
   }
 
   async start(userId: string, bookingId: string, dto: StartAgentBookingDto) {
@@ -294,14 +523,52 @@ export class AgentBookingsService {
     const agent = await this.context.requireApprovedAgent(userId);
     const booking = await this.requireAssignedBooking(bookingId, agent.id);
 
-    const finishedEarly = await this.finishCurrentVisit(booking, userId, dto.notes);
-    if (finishedEarly) return finishedEarly;
+    // A repeat of a completion that already went through (double tap, retry): nothing more to do.
+    if (booking.status === 'completed') return this.toStatusResponse(booking);
+    if (booking.status !== 'ongoing') {
+      throw new BadRequestException('Start the job with the customer OTP before completing it');
+    }
+    // Pay after service: closed only once the customer has paid, unless the
+    // agent reports they refused; then the amount is owed in their wallet.
+    const unpaid = booking.paymentMode === 'AFTER_SERVICE' && booking.paymentStatus !== 'PAID';
+    if (unpaid && !dto.customerRefusedPayment) {
+      throw new ConflictException(
+        "The customer hasn't paid yet. Ask them to pay in their app or scan the payment QR.",
+      );
+    }
 
-    booking.endTime = toTimeString(new Date());
+    const finishedEarly = await this.finishCurrentVisit(booking, userId, dto.notes);
+    if (finishedEarly) {
+      // A finished visit counts as a job towards a referral.
+      await this.referralRewards.onJobCompleted(agent.id);
+      return finishedEarly;
+    }
+
+    // Claimed with a conditional update, so two calls at once can't both complete it.
+    const endTime = toTimeString(new Date());
+    const claimed = await this.bookingRepo.update(
+      { id: booking.id, status: 'ongoing' },
+      { status: 'completed', endTime, ...(dto.notes !== undefined ? { notes: dto.notes } : {}) },
+    );
+    if (!claimed.affected) return this.toStatusResponse(await this.requireBooking(booking.id));
+    booking.status = 'completed';
+    booking.endTime = endTime;
     if (dto.notes !== undefined) booking.notes = dto.notes;
-    await this.history.transition(booking, 'completed', userId, dto.notes);
+    const amountDue = unpaid ? await this.recordDueIfUnpaid(booking.id) : 0;
+    const remarks = amountDue > 0
+      ? [`Customer did not pay: ₹${amountDue} owed in their wallet`, dto.notes].filter(Boolean).join(' · ')
+      : dto.notes;
+    await this.history.record(booking.id, 'completed', userId, remarks);
+    if (amountDue > 0) {
+      await this.notifyCustomer(booking, {
+        title: 'Payment due',
+        message: `Booking ${booking.bookingNumber} is done, but ₹${amountDue} wasn't paid. It's shown as due in your wallet; pay it from the booking.`,
+        type: 'wallet_due',
+      });
+    }
 
     const earning = await this.recordEarning(agent.id, booking);
+    await this.referralRewards.onJobCompleted(agent.id);
 
     await this.notifyCustomer(booking, {
       title: 'Service completed',
@@ -312,6 +579,7 @@ export class AgentBookingsService {
     return {
       ...this.toStatusResponse(booking),
       endTime: booking.endTime,
+      amountDue,
       earning: {
         serviceHours: Number(earning.serviceHours),
         revenueGenerated: Number(earning.revenueGenerated),
@@ -319,6 +587,36 @@ export class AgentBookingsService {
         earningDate: earning.earningDate,
       },
     };
+  }
+
+  /**
+   * What the agent's app needs to collect a pay-after-service booking: whether
+   * it's paid yet, and the link the payment QR encodes (opens the customer
+   * app's pay screen for this booking).
+   */
+  async paymentStatus(userId: string, bookingId: string) {
+    const agent = await this.context.requireApprovedAgent(userId);
+    const booking = await this.requireAssignedBooking(bookingId, agent.id);
+    return {
+      bookingId: booking.id,
+      bookingNumber: booking.bookingNumber,
+      paymentMode: booking.paymentMode,
+      paymentStatus: booking.paymentStatus,
+      amount: Number(booking.totalAmount),
+      payUrl: `${process.env.CUSTOMER_PAY_URL_BASE || 'clearit://pay/'}${booking.id}`,
+    };
+  }
+
+  /** Records the amount as owed, unless a payment landed while the job was being closed. */
+  private recordDueIfUnpaid(bookingId: string) {
+    return this.bookingRepo.manager.transaction(async (manager) => {
+      const locked = await manager.findOneOrFail(Booking, {
+        where: { id: bookingId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (locked.paymentStatus === 'PAID') return 0;
+      return this.wallet.recordDue(locked, manager);
+    });
   }
 
   private async matchVisitOtp(booking: Booking, otp: string) {
@@ -329,40 +627,69 @@ export class AgentBookingsService {
     return visits.find((visit) => visit.status !== 'done' && visit.otp === otp) ?? null;
   }
 
-  /** Marks the current visit done. Returns a response when later visits are still left. */
+  /**
+   * Marks the current visit done. Returns a response when later visits are
+   * still left (or when another call already finished this one). The booking
+   * row is locked and re-checked first, so two Complete calls at once can't
+   * finish two visits.
+   */
   private async finishCurrentVisit(booking: Booking, userId: string, notes?: string) {
-    const visits = await this.visitRepo.find({
-      where: { bookingId: booking.id },
-      order: { visitDate: 'ASC', startTime: 'ASC' },
+    const outcome = await this.bookingRepo.manager.transaction(async (manager) => {
+      const locked = await manager.findOne(Booking, {
+        where: { id: booking.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked || locked.status !== 'ongoing') return { kind: 'stale' as const };
+
+      const visits = await manager.find(BookingVisit, {
+        where: { bookingId: booking.id },
+        order: { visitDate: 'ASC', startTime: 'ASC' },
+      });
+      if (!visits.length) return { kind: 'single' as const };
+
+      const current =
+        visits.find((visit) => visit.status === 'active') ??
+        visits.find((visit) => visit.status === 'pending');
+      if (current) {
+        await manager.update(BookingVisit, { id: current.id }, { status: 'done', completedAt: new Date() });
+        current.status = 'done';
+      }
+
+      const next = visits.find((visit) => visit.status === 'pending');
+      if (!next) return { kind: 'last' as const };
+
+      const label = current ? `${shiftName(current.shift)} on ${String(current.visitDate).slice(0, 10)}` : 'This visit';
+      await manager.update(
+        Booking,
+        { id: booking.id },
+        { status: 'accepted', startOtp: next.otp, endTime: null, ...(notes !== undefined ? { notes } : {}) },
+      );
+      await manager.save(
+        manager.create(BookingStatusHistory, {
+          bookingId: booking.id,
+          status: 'accepted',
+          changedBy: userId,
+          remarks: `${label} completed`,
+        }),
+      );
+      return { kind: 'next' as const, label, otp: next.otp };
     });
-    if (!visits.length) return null;
 
-    const current =
-      visits.find((visit) => visit.status === 'active') ??
-      visits.find((visit) => visit.status === 'pending');
-    if (current) {
-      current.status = 'done';
-      current.completedAt = new Date();
-      await this.visitRepo.save(current);
-    }
-
-    const next = visits.find((visit) => visit.status === 'pending');
-    if (!next) return null;
+    if (outcome.kind === 'stale') return this.toStatusResponse(await this.requireBooking(booking.id));
+    if (outcome.kind !== 'next') return null;
 
     booking.status = 'accepted';
-    booking.startOtp = next.otp;
+    booking.startOtp = outcome.otp;
     booking.endTime = null;
     if (notes !== undefined) booking.notes = notes;
-    await this.bookingRepo.save(booking);
-    const label = current ? `${shiftName(current.shift)} on ${String(current.visitDate).slice(0, 10)}` : 'This visit';
-    await this.history.record(booking.id, 'accepted', userId, `${label} completed`);
     await this.notifyCustomer(booking, {
       title: 'Visit completed',
-      message: `${label} for booking ${booking.bookingNumber} is done. The next visit has a new OTP.`,
+      message: `${outcome.label} for booking ${booking.bookingNumber} is done. The next visit has a new OTP.`,
       type: 'booking_visit_done',
     });
     return this.toStatusResponse(booking);
   }
+
 
   /**
    * Agent payout: per-hour rates from `service_pricing` when every booked
@@ -434,6 +761,15 @@ export class AgentBookingsService {
     return booking;
   }
 
+  /**
+   * Guard for the checklist / phase endpoints: the caller must be an approved
+   * agent holding this job. Anyone else gets 404, so they can't even tell it exists.
+   */
+  async requireOwnJob(userId: string, bookingId: string) {
+    const agent = await this.context.requireApprovedAgent(userId);
+    return this.requireAssignedBooking(bookingId, agent.id);
+  }
+
   private async requireAssignedBooking(bookingId: string, agentId: string) {
     const booking = await this.requireBooking(bookingId);
     if (booking.agentId !== agentId) {
@@ -449,6 +785,7 @@ export class AgentBookingsService {
     const customerUserId = booking.customer?.userId;
     if (!customerUserId) return Promise.resolve(undefined);
     return this.notifications.toUser(customerUserId, {
+      app: 'customer',
       ...input,
       data: { bookingId: booking.id, bookingNumber: booking.bookingNumber },
     });
@@ -502,9 +839,6 @@ export class AgentBookingsService {
 
   private toListItem(booking: Booking, agentId: string) {
     const isMine = booking.agentId === agentId;
-    const services = (booking.items ?? [])
-      .map((item) => item.service?.name)
-      .filter((name): name is string => !!name);
     return {
       id: booking.id,
       bookingNumber: booking.bookingNumber,
@@ -515,10 +849,18 @@ export class AgentBookingsService {
       totalAmount: Number(booking.totalAmount),
       planType: booking.planType,
       planTitle: booking.planTitle,
-      services: services.length || !booking.planTitle ? services : [booking.planTitle],
+      services: serviceNames(booking),
       address: this.toAddress(booking.address, isMine),
       customerFirstName: booking.customer?.firstName ?? null,
+      customerMobile:
+        isMine && CALLABLE_STATUSES.includes(booking.status)
+          ? (booking.customer?.user?.mobile ?? null)
+          : null,
       isAssignedToMe: isMine,
+      paymentMode: booking.paymentMode,
+      paymentStatus: booking.paymentStatus,
+      // "Right now" jobs are accepted and set off on in one tap.
+      bookingMode: booking.bookingMode,
     };
   }
 
@@ -529,8 +871,8 @@ export class AgentBookingsService {
       locality: address.addressLine2 ?? address.landmark,
       city: address.city,
       pincode: address.pincode,
-      latitude: address.latitude === null ? null : Number(address.latitude),
-      longitude: address.longitude === null ? null : Number(address.longitude),
+      latitude: toPublicCoord(address.latitude, isMine),
+      longitude: toPublicCoord(address.longitude, isMine),
       ...(isMine
         ? {
             addressLine1: address.addressLine1,
@@ -542,6 +884,41 @@ export class AgentBookingsService {
     };
   }
 
+  /**
+   * Handing back a job the agent holds: not once they're on the way, not
+   * within RELEASE_CUTOFF_MINUTES of the start (the customer can't be left
+   * hanging), and not more than MAX_RELEASES_PER_WINDOW times a month.
+   * Past those limits it goes through support, who can reassign it.
+   */
+  private async assertCanRelease(agentId: string, booking: Booking) {
+    if (booking.status === 'arriving') {
+      throw new BadRequestException(
+        "You're already on your way. Contact support to hand this job back.",
+      );
+    }
+    const start = (await this.eligibility.nextStarts([booking])).get(booking.id);
+    if (!start || start.getTime() - Date.now() < RELEASE_CUTOFF_MINUTES * 60_000) {
+      throw new BadRequestException(
+        `Jobs can't be released within ${RELEASE_CUTOFF_MINUTES / 60} hours of the start. Contact support.`,
+      );
+    }
+    const recent = await this.dispatch.recentReleases(agentId, RELEASE_WINDOW_DAYS);
+    if (recent >= MAX_RELEASES_PER_WINDOW) {
+      throw new BadRequestException(
+        `You've released ${recent} jobs in the last ${RELEASE_WINDOW_DAYS} days. Contact support to release this one.`,
+      );
+    }
+  }
+
+  private async assertFitsSchedule(agentId: string, booking: Booking) {
+    const blocked = await this.eligibility.blockedJobs(agentId, [booking]);
+    if (blocked.has(booking.id)) {
+      throw new ConflictException(
+        'This job clashes with your availability or another job you hold',
+      );
+    }
+  }
+
   private toStatusResponse(booking: Booking) {
     return {
       bookingId: booking.id,
@@ -550,61 +927,17 @@ export class AgentBookingsService {
     };
   }
 
-  /**
-   * Open pool is filtered by verified skills, then by the agent's assigned
-   * service areas. Outside those areas, last-known GPS still limits the list
-   * to the 3 km (or 5 km boosted) radius. Jobs without coordinates stay visible.
-   */
-  private async filterAvailableJobs<
-    T extends {
-      id: string;
-      services: string[];
-      planType: Booking['planType'];
-      address: { latitude?: number | null; longitude?: number | null } | null;
-    },
-  >(agent: Agent, jobs: T[], bookings: Booking[]) {
-    const match = await this.skills.matchingContext(agent.id);
-    const zones = new Set(
-      [...(agent.serviceAreas ?? []), agent.homeZoneId].filter(
-        (id): id is string => !!id,
-      ),
-    );
-    const areaOf = new Map(bookings.map((booking) => [booking.id, booking.serviceAreaId]));
-    // On Demand is general help by the hour, so any approved agent can take it.
-    const bySkill = jobs.filter(
-      (job) =>
-        job.planType === 'HOURLY' ||
-        job.services.some((name) => matchesSkill(name, match.keywords)),
-    );
-
-    const withDistance = await this.annotateDistanceKm(agent.id, bySkill);
-    return withDistance.filter((job) => {
-      const areaId = areaOf.get(job.id);
-      if (areaId && zones.has(areaId)) return true;
-      return job.distanceKm == null || job.distanceKm <= match.serviceRadiusKm;
-    });
-  }
-
-  /** Attaches straight-line distance (km) from the agent's last known GPS ping to each job's address. */
-  private async annotateDistanceKm<
-    T extends {
-      address: { latitude?: number | null; longitude?: number | null } | null;
-    },
-  >(agentId: string, jobs: T[]) {
-    const ping = await this.locationRepo.findOne({
-      where: { agentId },
-      order: { recordedAt: 'DESC' },
-    });
-    if (!ping) return jobs.map((job) => ({ ...job, distanceKm: null }));
-
-    const origin = { lat: Number(ping.latitude), lng: Number(ping.longitude) };
-    return jobs.map((job) => {
-      const lat = job.address?.latitude;
-      const lng = job.address?.longitude;
-      const distanceKm =
-        lat != null && lng != null ? haversineKm(origin.lat, origin.lng, lat, lng) : null;
-      return { ...job, distanceKm };
-    });
+  /** Attaches `distanceKm`, computed from the stored (unrounded) address of each row. */
+  private withDistanceKm<T extends { id: string }>(
+    origin: GeoPoint | null,
+    items: T[],
+    rows: Booking[],
+  ) {
+    const addressOf = new Map(rows.map((row) => [row.id, row.address]));
+    return items.map((item) => ({
+      ...item,
+      distanceKm: distanceKm(origin, addressOf.get(item.id)),
+    }));
   }
 }
 
@@ -615,25 +948,14 @@ function buildDateFilter(from?: string, to?: string) {
   return undefined;
 }
 
-function matchesSkill(serviceName: string, keywords: string[]) {
-  const haystack = serviceName.toLowerCase();
-  return keywords.some(
-    (keyword) => haystack.includes(keyword) || keyword.includes(haystack),
-  );
-}
-
 function shiftName(shift: string) {
   if (shift === 'morning') return 'Morning';
   if (shift === 'evening') return 'Evening';
   return 'Visit';
 }
 
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const toRad = (value: number) => (value * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+function toPublicCoord(value: string | null, exact: boolean) {
+  if (value === null) return null;
+  const coord = Number(value);
+  return exact ? coord : Number(coord.toFixed(OPEN_JOB_COORD_DECIMALS));
 }

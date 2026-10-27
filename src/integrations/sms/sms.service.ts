@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { OtpDeliveryChannel } from 'src/common/types/otp.types';
 import { CustomLoggerService } from 'src/common/utils/logger.service';
 
 export type SmsResult = {
@@ -12,6 +13,7 @@ export type SmsResult = {
  * Sends OTP SMS. Local/demo logs the code. Production needs SMS_PROVIDER + SMS_API_KEY:
  * - fast2sms  SMS_API_KEY
  * - msg91     SMS_API_KEY + SMS_OTP_TEMPLATE_ID
+ * - apitxt    SMS_API_KEY; channel-specific template settings are optional
  * - twilio    SMS_API_KEY + SMS_API_SECRET, and optionally SMS_TWILIO_VERIFY_SERVICE_SID
  *             (trial accounts cannot send custom SMS; OTP uses Twilio Verify templates)
  */
@@ -22,12 +24,33 @@ export class SmsService {
     private readonly logger: CustomLoggerService,
   ) {}
 
-  async sendOtp(mobile: string, code: string) {
+  async sendOtp(
+    mobile: string,
+    code: string,
+    channel?: OtpDeliveryChannel,
+  ) {
     const provider = (this.config.get<string>('SMS_PROVIDER') || '').trim().toLowerCase();
-    if (provider === 'twilio') return this.sendTwilioVerify(mobile);
+    if (provider === 'twilio') {
+      if (channel && channel !== 'sms') {
+        return {
+          delivered: false,
+          provider,
+          error: 'WhatsApp and voice OTP delivery require the APITXT provider',
+        };
+      }
+      return this.sendTwilioVerify(mobile);
+    }
+    if (provider === 'apitxt') return this.sendApiTxtOtp(mobile, code, channel);
+    if (channel && channel !== 'sms') {
+      return {
+        delivered: false,
+        provider: provider || 'stub',
+        error: 'WhatsApp and voice OTP delivery require the APITXT provider',
+      };
+    }
     const template =
       this.config.get<string>('SMS_OTP_TEMPLATE') ||
-      'Your Oseedy verification code is {{code}}. It expires shortly.';
+      'Your Szoop verification code is {{code}}. It expires shortly.';
     return this.send(mobile, template.replace('{{code}}', code), code);
   }
 
@@ -141,8 +164,106 @@ export class SmsService {
         };
   }
 
+  private async sendApiTxtOtp(
+    mobile: string,
+    otp: string,
+    requestedChannel?: OtpDeliveryChannel,
+  ): Promise<SmsResult> {
+    const apiKey = (this.config.get<string>('SMS_API_KEY') || '').trim();
+    if (!apiKey) {
+      return {
+        delivered: false,
+        provider: 'apitxt',
+        error: 'Missing APITXT configuration: SMS_API_KEY',
+      };
+    }
+
+    const channel = (requestedChannel || this.config.get<string>('SMS_CHANNEL') || 'sms')
+      .trim()
+      .toLowerCase();
+    if (!['sms', 'whatsapp', 'voice'].includes(channel)) {
+      return {
+        delivered: false,
+        provider: 'apitxt',
+        error: 'SMS_CHANNEL must be sms, whatsapp, or voice',
+      };
+    }
+
+    const params = new URLSearchParams({ authkey: apiKey, mobile, otp });
+    if (channel !== 'sms' || this.config.get<string>('SMS_CHANNEL')?.trim()) {
+      params.set('channel', channel);
+    }
+
+    const country = (this.config.get<string>('SMS_COUNTRY') || '').trim();
+    if (country) params.set('country', country);
+
+    if (channel === 'sms') {
+      const templateId = (
+        this.config.get<string>('SMS_OTP_TEMPLATE_ID') || ''
+      ).trim();
+      if (templateId) params.set('template_id', templateId);
+    } else if (channel === 'whatsapp') {
+      const templateName = (
+        this.config.get<string>('SMS_OTP_TEMPLATE_NAME') || ''
+      ).trim();
+      const projectRefId = (
+        this.config.get<string>('SMS_PROJECT_REF_ID') || ''
+      ).trim();
+      if (templateName) params.set('template_name', templateName);
+      if (projectRefId) params.set('project_ref_id', projectRefId);
+    }
+
+    try {
+      const res = await fetch('https://apitxt.com/api/sendOTP', {
+        method: 'POST',
+        body: params.toString(),
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+      const text = await res.text();
+      let json: Record<string, unknown> | null = null;
+      if (text) {
+        try {
+          const parsed: unknown = JSON.parse(text);
+          if (parsed && typeof parsed === 'object') {
+            json = parsed as Record<string, unknown>;
+          }
+        } catch {
+          json = { message: text };
+        }
+      }
+
+      const status = String(json?.status ?? json?.type ?? '').toLowerCase();
+      const rejected =
+        json?.success === false ||
+        json?.return === false ||
+        status === 'error' ||
+        status === 'failed' ||
+        Boolean(json?.error);
+      if (!res.ok || rejected) {
+        return {
+          delivered: false,
+          provider: 'apitxt',
+          error: this.stringifyError(json) || `APITXT returned HTTP ${res.status}`,
+        };
+      }
+      this.logger.log(`OTP sent via APITXT (${channel}) to ${mobile}`, 'SmsService');
+      return { delivered: true, provider: 'apitxt' };
+    } catch {
+      this.logger.error('APITXT OTP request failed', undefined, 'SmsService');
+      return {
+        delivered: false,
+        provider: 'apitxt',
+        error: 'Could not connect to the APITXT SMS service',
+      };
+    }
+  }
+
   usesTwilioVerify() {
-    return (this.config.get<string>('SMS_PROVIDER') || '').trim().toLowerCase() === 'twilio';
+        return (this.config.get<string>('SMS_PROVIDER') || '').trim().toLowerCase() === 'twilio';
   }
 
   async checkTwilioOtp(mobile: string, code: string): Promise<
@@ -201,7 +322,7 @@ export class SmsService {
     const listed = await this.twilioForm('https://verify.twilio.com/v2/Services', {}, 'GET');
     const services = (listed.json?.services as { sid?: string; friendly_name?: string }[] | undefined) ?? [];
     const existing =
-      services.find((s) => (s.friendly_name || '').toLowerCase() === 'oseedy') || services[0];
+      services.find((s) => (s.friendly_name || '').toLowerCase() === 'szoop') || services[0];
     if (existing?.sid) {
       this.cachedVerifySid = existing.sid;
       return { ok: true, sid: existing.sid };
@@ -209,7 +330,7 @@ export class SmsService {
 
     const codeLength = (this.config.get<string>('OTP_LENGTH') || '4').trim();
     const created = await this.twilioForm('https://verify.twilio.com/v2/Services', {
-      FriendlyName: 'Oseedy',
+      FriendlyName: 'Szoop',
       CodeLength: codeLength,
     });
     const sid = typeof created.json?.sid === 'string' ? created.json.sid : '';

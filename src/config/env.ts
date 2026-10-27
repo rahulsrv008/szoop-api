@@ -70,6 +70,17 @@ export function validateEnv(appEnv: AppEnv = resolveAppEnv()): void {
     );
   }
 
+  const missingPayments = [
+    'RAZORPAY_KEY_ID',
+    'RAZORPAY_KEY_SECRET',
+    'RAZORPAY_WEBHOOK_SECRET',
+  ].filter((key) => !process.env[key]?.trim());
+  if (missingPayments.length) {
+    throw new Error(
+      `Missing required payment env: ${missingPayments.join(', ')}. Configure Razorpay test or live credentials.`,
+    );
+  }
+
   if ((process.env.DB_SYNC ?? '').toLowerCase() === 'true') {
     throw new Error('DB_SYNC must be false in staging/production. Apply sql/001_full_schema.sql instead.');
   }

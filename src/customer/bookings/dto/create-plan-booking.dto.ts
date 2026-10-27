@@ -65,6 +65,12 @@ export class CreatePlanBookingDto {
   @IsInt()
   durationDays?: number;
 
+  @ApiPropertyOptional({ example: 'SZOOP30' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  couponCode?: string;
+
   @ApiPropertyOptional({ example: 'Ring the bell twice' })
   @IsOptional()
   @IsString()

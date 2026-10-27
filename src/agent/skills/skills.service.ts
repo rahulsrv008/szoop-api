@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { Agent, AgentSkill, Skill } from 'src/database/entities';
+import { Agent, AgentSkill, Booking, Skill } from 'src/database/entities';
+import { BATHROOM_SKILL_CODE, isBathroomJob } from 'src/dispatch/dispatch.rules';
 import { AgentContextService } from '../shared/agent-context.service';
 import {
   BOOSTED_SERVICE_RADIUS_KM,
@@ -93,38 +94,54 @@ export class AgentSkillsService {
   }
 
   async matchingContext(agentId: string) {
-    const [agent, rows] = await Promise.all([
-      this.agentRepo.findOne({ where: { id: agentId } }),
+    const contexts = await this.matchingContexts([agentId]);
+    return contexts.get(agentId) ?? toMatchingContext(null, []);
+  }
+
+  /** `matchingContext` for many agents in two queries — used by the dispatcher. */
+  async matchingContexts(agentIds: string[]) {
+    const ids = [...new Set(agentIds)];
+    const contexts = new Map<string, ReturnType<typeof toMatchingContext>>();
+    if (!ids.length) return contexts;
+
+    const [agents, rows] = await Promise.all([
+      this.agentRepo.find({ where: { id: In(ids) } }),
       this.agentSkillRepo.find({
         where: {
-          agentId,
+          agentId: In(ids),
           selected: true,
           trainingStatus: In(['VERIFIED', 'IN_TRAINING']),
         },
         relations: ['skill'],
       }),
     ]);
-
-    return {
-      boostEnabled: agent?.boostEnabled ?? false,
-      serviceRadiusKm: agent?.boostEnabled
-        ? BOOSTED_SERVICE_RADIUS_KM
-        : DEFAULT_SERVICE_RADIUS_KM,
-      keywords: rows.flatMap((row) =>
-        [row.skill.name, row.skill.matchKeywords]
-          .join(',')
-          .split(',')
-          .map((value) => value.trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    };
+    for (const agent of agents) {
+      contexts.set(
+        agent.id,
+        toMatchingContext(agent, rows.filter((row) => row.agentId === agent.id)),
+      );
+    }
+    return contexts;
   }
 
+  /**
+   * Whether the agent may hold this booking. Only bathroom jobs are gated here:
+   * they need the Bathroom Cleaning skill, whatever else the agent does.
+   */
+  async canTake(agentId: string, booking: Booking) {
+    if (!isBathroomJob(booking)) return true;
+    const { skillCodes } = await this.matchingContext(agentId);
+    return skillCodes.includes(BATHROOM_SKILL_CODE);
+  }
+
+  /** Adds catalog skills the table doesn't have yet; existing rows are left as they are. */
   private async ensureCatalog() {
-    const count = await this.skillRepo.count();
-    if (count > 0) return;
+    const existing = await this.skillRepo.find({ select: ['code'] });
+    const have = new Set(existing.map((skill) => skill.code));
+    const missing = SKILL_CATALOG.filter((skill) => !have.has(skill.code));
+    if (!missing.length) return;
     await this.skillRepo.save(
-      SKILL_CATALOG.map((skill) =>
+      missing.map((skill) =>
         this.skillRepo.create({
           code: skill.code,
           name: skill.name,
@@ -147,4 +164,21 @@ export class AgentSkillsService {
       description: skill.description,
     };
   }
+}
+
+function toMatchingContext(agent: Agent | null, rows: AgentSkill[]) {
+  return {
+    boostEnabled: agent?.boostEnabled ?? false,
+    serviceRadiusKm: agent?.boostEnabled
+      ? BOOSTED_SERVICE_RADIUS_KM
+      : DEFAULT_SERVICE_RADIUS_KM,
+    keywords: rows.flatMap((row) =>
+      [row.skill.name, row.skill.matchKeywords]
+        .join(',')
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+    skillCodes: rows.map((row) => row.skill.code),
+  };
 }

@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
-import { DeviceToken, Notification } from 'src/database/entities';
+import { In, IsNull, Repository } from 'typeorm';
+import { DeviceToken, Notification, NotificationApp } from 'src/database/entities';
 import { PushService } from 'src/integrations/push/push.service';
 
 export interface DispatchInput {
@@ -9,14 +9,44 @@ export interface DispatchInput {
   message: string;
   type?: string;
   data?: Record<string, string>;
+  /**
+   * The app it's for. One user can be both a customer and an agent (same
+   * mobile), so this keeps agent pushes out of the customer app and back.
+   * Omitted: every app the user is signed in to (e.g. an admin broadcast to all).
+   */
+  app?: NotificationApp;
 }
+
+/**
+ * The `app` columns (sql/notification_app.sql). Checked first so the ALTERs,
+ * which lock their tables, only run when a column is actually missing.
+ */
+const NOTIFICATION_APP_SQL = `
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+                 AND table_name = 'device_tokens' AND column_name = 'app') THEN
+    ALTER TABLE device_tokens ADD COLUMN app VARCHAR(20);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+                 AND table_name = 'notifications' AND column_name = 'app') THEN
+    ALTER TABLE notifications ADD COLUMN app VARCHAR(20);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+                 AND table_name = 'support_tickets' AND column_name = 'app') THEN
+    ALTER TABLE support_tickets ADD COLUMN app VARCHAR(20);
+  END IF;
+END $$;
+`;
 
 /**
  * Writes the in-app notification row (what the apps read) and fans the same
  * payload out to FCM. Used by customer, agent and admin modules.
  */
 @Injectable()
-export class NotificationDispatchService {
+export class NotificationDispatchService implements OnModuleInit {
+  private readonly logger = new Logger(NotificationDispatchService.name);
+
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepo: Repository<Notification>,
@@ -24,6 +54,14 @@ export class NotificationDispatchService {
     private readonly deviceTokenRepo: Repository<DeviceToken>,
     private readonly push: PushService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.notificationRepo.query(NOTIFICATION_APP_SQL);
+    } catch (err) {
+      this.logger.error('Failed to ensure the notification app columns', err as Error);
+    }
+  }
 
   async toUser(userId: string, input: DispatchInput) {
     const [notification] = await this.toUsers([userId], input);
@@ -42,27 +80,45 @@ export class NotificationDispatchService {
           message: input.message,
           notificationType: input.type ?? 'general',
           isRead: false,
+          app: input.app ?? null,
         }),
       ),
     );
 
+    // Only that app's phones; untagged phones (registered before tagging) still
+    // get it until their app registers again, which it does on every launch.
     const devices = await this.deviceTokenRepo.find({
-      where: { userId: In(unique), isActive: true },
+      where: input.app
+        ? [
+            { userId: In(unique), isActive: true, app: input.app },
+            { userId: In(unique), isActive: true, app: IsNull() },
+          ]
+        : { userId: In(unique), isActive: true },
       select: ['token'],
     });
+    // A job offer rings with the agent app's ringtone on its own channel, so it
+    // is heard with the app closed; the type lets the app tell offers apart.
+    const ringing = input.type === 'job_offer';
     await this.push.sendToTokens(
       devices.map((device) => device.token),
-      { title: input.title, body: input.message, data: input.data },
+      {
+        title: input.title,
+        body: input.message,
+        data: { ...(input.data ?? {}), ...(input.type ? { type: input.type } : {}) },
+        ...(ringing ? { channelId: 'job-offers', sound: 'job_ring.wav' } : {}),
+      },
     );
 
     return notifications;
   }
 
-  async registerDevice(userId: string, token: string, platform?: string) {
+  /** `app`: which app registered the phone, so pushes go only to the app they're for. */
+  async registerDevice(userId: string, token: string, platform: string | undefined, app: NotificationApp) {
     const existing = await this.deviceTokenRepo.findOne({ where: { token } });
     if (existing) {
       existing.userId = userId;
       existing.platform = platform ?? existing.platform;
+      existing.app = app;
       existing.isActive = true;
       return this.deviceTokenRepo.save(existing);
     }
@@ -71,6 +127,7 @@ export class NotificationDispatchService {
         userId,
         token,
         platform: platform ?? null,
+        app,
         isActive: true,
       }),
     );

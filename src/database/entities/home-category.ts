@@ -61,6 +61,10 @@ export class HomeCategory {
   @Column({ type: 'jsonb', default: () => "'[]'" })
   highlights: HomeHighlight[];
 
+  /** What the service doesn't cover, shown in its description and at checkout. */
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  exclusions: string[];
+
   /** Durations offered when the category itself is booked (On Demand). */
   @Column({ type: 'jsonb', default: () => "'[]'" })
   pricing: HomePricingTier[];

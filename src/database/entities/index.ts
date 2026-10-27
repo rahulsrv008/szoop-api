@@ -17,7 +17,9 @@ export { ServiceZoneArea } from './service-zone-area';
 export { ServicePricing } from './service-pricing';
 export { Society } from './society';
 export { Booking } from './booking';
-export type { BookingStatus } from './booking';
+export type { BookingMode, BookingStatus, PaymentMode } from './booking';
+export { WalletTransaction } from './wallet-transaction';
+export type { WalletTransactionReason, WalletTransactionType } from './wallet-transaction';
 export { BookingVisit } from './booking-visit';
 export type { BookingVisitShift, BookingVisitStatus } from './booking-visit';
 export { BookingItem } from './booking-item';
@@ -31,14 +33,31 @@ export { Payment } from './payment';
 export type { PaymentStatus } from './payment';
 export { PaymentTransaction } from './payment-transaction';
 export { AgentEarning } from './agent-earning';
+export { AgentReferral } from './agent-referral';
+export type { AgentReferralStatus } from './agent-referral';
+export { AgentReferralReward } from './agent-referral-reward';
+export type {
+  ReferralRewardReason,
+  ReferralRewardStatus,
+  ReferralRewardType,
+} from './agent-referral-reward';
 export { AgentIncentive } from './agent-incentive';
 export { SalaryRecord } from './salary-record';
 export { Rating } from './rating';
 export { Review } from './review';
 export { Notification } from './notification';
+export type { NotificationApp } from './notification';
 export { SupportTicket } from './support-ticket';
 export { Coupon } from './coupon';
+export { CouponCustomer } from './coupon-customer';
 export { CouponUsage } from './coupon-usage';
+export { CouponEligibilityRule } from './coupon-eligibility-rule';
+export type {
+  RuleServiceType,
+  RuleConditionType,
+  RuleComparisonOperator,
+  CouponRuleCondition,
+} from './coupon-eligibility-rule';
 export { AuditLog } from './audit-log';
 export { Skill } from './skill';
 export { AgentSkill } from './agent-skill';
@@ -66,3 +85,11 @@ export type {
   PayoutStatus,
 } from './booking-settlement';
 export { BookingCustomerFeedback } from './booking-customer-feedback';
+export { BookingOffer } from './booking-offer';
+export type { BookingOfferStatus } from './booking-offer';
+export { BookingDispatch } from './booking-dispatch';
+export type { BookingDispatchStatus } from './booking-dispatch';
+export { UpcomingCity } from './upcoming-city';
+export { CityWaitlist } from './city-waitlist';
+export { AgentMissedJob } from './agent-missed-job';
+export type { MissedJobReason } from './agent-missed-job';

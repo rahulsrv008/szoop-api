@@ -1,21 +1,39 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { HomeCategory, HomePopularItem } from 'src/database/entities';
+import { normalizeHomeScreen, resolveHomeTabs } from 'src/common/home-screen';
 import {
   SETTING_KEYS,
   SettingsService,
 } from 'src/common/services/settings.service';
 
+/** Mirrors the columns in sql/bathroom_cleaning.sql, so the home queries never miss them. */
+const SCHEMA_SQL = `
+ALTER TABLE home_categories ADD COLUMN IF NOT EXISTS exclusions JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE home_category_options ADD COLUMN IF NOT EXISTS exclusions JSONB NOT NULL DEFAULT '[]';
+`;
+
 @Injectable()
-export class CustomerHomeService {
+export class CustomerHomeService implements OnModuleInit {
+  private readonly logger = new Logger(CustomerHomeService.name);
+
   constructor(
     @InjectRepository(HomeCategory)
     private readonly categoryRepo: Repository<HomeCategory>,
     @InjectRepository(HomePopularItem)
     private readonly popularRepo: Repository<HomePopularItem>,
     private readonly settings: SettingsService,
+    private readonly dataSource: DataSource,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.dataSource.query(SCHEMA_SQL);
+    } catch (err) {
+      this.logger.error('Failed to ensure home content exclusions columns', err as Error);
+    }
+  }
 
   async home() {
     const [
@@ -27,6 +45,7 @@ export class CustomerHomeService {
       bothPerPerson,
       extraPersonDiscountPercent,
       cleaningMonthly,
+      homeScreen,
     ] = await Promise.all([
       this.categoryRepo.find({
         where: { isActive: true },
@@ -47,10 +66,16 @@ export class CustomerHomeService {
       this.settings.getNumber(SETTING_KEYS.COOK_BOTH_PER_PERSON, 2000),
       this.settings.getNumber(SETTING_KEYS.COOK_EXTRA_PERSON_DISCOUNT_PERCENT, 10),
       this.settings.getNumber(SETTING_KEYS.COOK_CLEANING_MONTHLY, 1200),
+      this.settings.get(SETTING_KEYS.CUSTOMER_HOME_SCREEN, null),
     ]);
+
+    const screen = normalizeHomeScreen(homeScreen);
+    const tabs = resolveHomeTabs(screen.tabs, categories);
 
     return {
       taxPercent,
+      screen: { ...screen, tabs },
+      tabs,
       cookPricing: {
         morningPerPerson,
         eveningPerPerson,
@@ -69,6 +94,7 @@ export class CustomerHomeService {
         actionType: category.actionType,
         popupTitle: category.popupTitle,
         highlights: category.highlights ?? [],
+        exclusions: category.exclusions ?? [],
         pricing: category.pricing ?? [],
         options: (category.options ?? [])
           .filter((option) => option.isActive)
@@ -81,6 +107,7 @@ export class CustomerHomeService {
             imageUrl: option.imageUrl,
             popupTitle: option.popupTitle,
             highlights: option.highlights ?? [],
+            exclusions: option.exclusions ?? [],
             pricing: option.pricing ?? [],
           })),
       })),

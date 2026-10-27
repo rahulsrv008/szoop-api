@@ -9,26 +9,31 @@ import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { LogoutDto } from './dto/logout.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('customer')
 @Controller(ROUTES.CUSTOMER.AUTH)
 export class CustomerAuthController {
   constructor(private readonly authService: CustomerAuthService) {}
 
+  @RateLimit(RATE_LIMITS.OTP_SEND)
   @Post('send-otp')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Send login OTP to a customer mobile number' })
+  @ApiOperation({ summary: 'Send login OTP to a customer via the selected channel' })
   sendOtp(@Body() dto: SendOtpDto) {
-    return this.authService.sendOtp(dto.mobile);
+    return this.authService.sendOtp(dto.mobile, dto.channel);
   }
 
+  @RateLimit(RATE_LIMITS.OTP_SEND)
   @Post('resend-otp')
   @HttpCode(200)
   @ApiOperation({ summary: 'Resend the login OTP (rate limited)' })
   resendOtp(@Body() dto: SendOtpDto) {
-    return this.authService.resendOtp(dto.mobile);
+    return this.authService.resendOtp(dto.mobile, dto.channel);
   }
 
+  @RateLimit(RATE_LIMITS.OTP_VERIFY)
   @Post('verify-otp')
   @HttpCode(200)
   @ApiOperation({

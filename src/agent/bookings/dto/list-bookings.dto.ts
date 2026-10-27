@@ -15,6 +15,7 @@ const BOOKING_STATUSES: BookingStatus[] = [
   'ongoing',
   'completed',
   'cancelled',
+  'expired',
 ];
 
 export class ListAgentBookingsDto extends PaginationQueryDto {

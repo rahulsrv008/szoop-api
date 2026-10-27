@@ -6,6 +6,8 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { CustomerPaymentsService } from './payments.service';
 import { CreateCustomerPaymentDto } from './dto/create-payment.dto';
 import { VerifyCustomerPaymentDto } from './dto/verify-payment.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('customer')
 @CustomerAuth()
@@ -13,6 +15,7 @@ import { VerifyCustomerPaymentDto } from './dto/verify-payment.dto';
 export class CustomerPaymentsController {
   constructor(private readonly paymentsService: CustomerPaymentsService) {}
 
+  @RateLimit(RATE_LIMITS.PAYMENT_CREATE)
   @Post('create')
   @HttpCode(200)
   @ApiOperation({ summary: 'Create a gateway order for a booking' })
@@ -33,5 +36,17 @@ export class CustomerPaymentsController {
     @Body() dto: VerifyCustomerPaymentDto,
   ) {
     return this.paymentsService.verify(userId, dto);
+  }
+
+  @Post('wallet')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Pay for a booking using wallet balance',
+  })
+  payWithWallet(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: { bookingId: string },
+  ) {
+    return this.paymentsService.payWithWallet(userId, dto.bookingId);
   }
 }

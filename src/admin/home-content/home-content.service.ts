@@ -12,7 +12,12 @@ import {
   HomePopularItem,
   HomePricingTier,
 } from 'src/database/entities';
+import { normalizeHomeScreen } from 'src/common/home-screen';
 import { AuditService } from 'src/common/services/audit.service';
+import {
+  SETTING_KEYS,
+  SettingsService,
+} from 'src/common/services/settings.service';
 import {
   CreateHomeCategoryDto,
   CreateHomeCategoryOptionDto,
@@ -22,6 +27,7 @@ import {
   UpdateHomeCategoryDto,
   UpdateHomeCategoryOptionDto,
   UpdateHomePopularItemDto,
+  UpdateHomeScreenDto,
 } from './dto/home-content.dto';
 
 type Nullable<T> = { [K in keyof T]: T[K] | null | undefined };
@@ -47,6 +53,10 @@ function cleanHighlights(list?: HomeHighlightDto[]): HomeHighlight[] {
     .filter((item) => item.text);
 }
 
+function cleanExclusions(list?: string[]): string[] {
+  return (list ?? []).map((item) => item.trim()).filter(Boolean);
+}
+
 /** Copies only the keys present on the DTO so PATCH keeps untouched fields. */
 function assignDefined<T extends object>(target: T, patch: Nullable<Partial<T>>) {
   for (const [key, value] of Object.entries(patch)) {
@@ -64,7 +74,26 @@ export class AdminHomeContentService {
     @InjectRepository(HomePopularItem)
     private readonly popularRepo: Repository<HomePopularItem>,
     private readonly audit: AuditService,
+    private readonly settings: SettingsService,
   ) {}
+
+  async getScreen() {
+    const stored = await this.settings.get(
+      SETTING_KEYS.CUSTOMER_HOME_SCREEN,
+      null,
+    );
+    return normalizeHomeScreen(stored);
+  }
+
+  async updateScreen(adminId: string, dto: UpdateHomeScreenDto) {
+    const screen = normalizeHomeScreen(dto);
+    await this.settings.set(SETTING_KEYS.CUSTOMER_HOME_SCREEN, screen, {
+      description: 'Customer app front page: offers, trust, how it works, and the bottom call to action.',
+      updatedBy: adminId,
+    });
+    await this.record(adminId, 'HOME_SCREEN_UPDATED', 'system_settings', null);
+    return screen;
+  }
 
   listCategories() {
     return this.categoryRepo.find({
@@ -89,6 +118,7 @@ export class AdminHomeContentService {
         actionType: dto.actionType ?? 'POPUP',
         popupTitle: dto.popupTitle ?? null,
         highlights: cleanHighlights(dto.highlights),
+        exclusions: cleanExclusions(dto.exclusions),
         pricing: cleanPricing(dto.pricing),
         sortOrder: dto.sortOrder ?? 0,
         isActive: dto.isActive ?? true,
@@ -100,10 +130,11 @@ export class AdminHomeContentService {
 
   async updateCategory(adminId: string, id: string, dto: UpdateHomeCategoryDto) {
     const category = await this.requireCategory(id);
-    const { highlights, pricing, title, ...rest } = dto;
+    const { highlights, exclusions, pricing, title, ...rest } = dto;
     assignDefined(category, rest);
     if (title !== undefined) category.title = title.trim();
     if (highlights !== undefined) category.highlights = cleanHighlights(highlights);
+    if (exclusions !== undefined) category.exclusions = cleanExclusions(exclusions);
     if (pricing !== undefined) category.pricing = cleanPricing(pricing);
     await this.categoryRepo.save(category);
     await this.record(adminId, 'HOME_CATEGORY_UPDATED', 'home_categories', id);
@@ -133,6 +164,7 @@ export class AdminHomeContentService {
         imageUrl: dto.imageUrl ?? null,
         popupTitle: dto.popupTitle ?? null,
         highlights: cleanHighlights(dto.highlights),
+        exclusions: cleanExclusions(dto.exclusions),
         pricing: cleanPricing(dto.pricing),
         sortOrder: dto.sortOrder ?? 0,
         isActive: dto.isActive ?? true,
@@ -144,10 +176,11 @@ export class AdminHomeContentService {
 
   async updateOption(adminId: string, id: string, dto: UpdateHomeCategoryOptionDto) {
     const option = await this.requireOption(id);
-    const { highlights, pricing, title, ...rest } = dto;
+    const { highlights, exclusions, pricing, title, ...rest } = dto;
     assignDefined(option, rest);
     if (title !== undefined) option.title = title.trim();
     if (highlights !== undefined) option.highlights = cleanHighlights(highlights);
+    if (exclusions !== undefined) option.exclusions = cleanExclusions(exclusions);
     if (pricing !== undefined) option.pricing = cleanPricing(pricing);
     await this.optionRepo.save(option);
     await this.record(adminId, 'HOME_OPTION_UPDATED', 'home_category_options', id);
@@ -230,7 +263,7 @@ export class AdminHomeContentService {
     return option;
   }
 
-  private record(adminId: string, action: string, entityType: string, entityId: string) {
+  private record(adminId: string, action: string, entityType: string, entityId: string | null) {
     return this.audit.record({
       userId: adminId,
       action,

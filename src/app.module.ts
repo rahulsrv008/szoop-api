@@ -11,7 +11,9 @@ import { HealthModule } from './health/health.module';
 import { CustomerModule } from './customer/customer.module';
 import { AgentModule } from './agent/agent.module';
 import { AdminModule } from './admin/admin.module';
+import { DispatchModule } from './dispatch/dispatch.module';
 import { AdminAccessInterceptor } from './common/auth/admin-access.interceptor';
+import { RateLimitModule, RateLimitStorageModule } from './common/rate-limit/rate-limit.module';
 
 @Module({
   imports: [
@@ -27,12 +29,15 @@ import { AdminAccessInterceptor } from './common/auth/admin-access.interceptor';
     }),
     DatabaseModule,
     IntegrationsModule,
+    RateLimitStorageModule,
     CommonModule,
+    RateLimitModule,
     HealthModule,
     // One app per client: /api/v1/customer/*, /api/v1/agent/*, /api/v1/admin/*
     CustomerModule,
     AgentModule,
     AdminModule,
+    DispatchModule,
   ],
   controllers: [AppController],
   providers: [

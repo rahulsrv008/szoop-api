@@ -2,10 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CustomLoggerService } from 'src/common/utils/logger.service';
 
+/** Push is best-effort; a slow provider must not hold up the request that triggered it. */
+const PUSH_TIMEOUT_MS = 5000;
+
 export interface PushPayload {
   title: string;
   body: string;
   data?: Record<string, string>;
+  /** Android channel the app created; defaults to 'jobs'. */
+  channelId?: string;
+  /** A sound file bundled in the app (e.g. 'job_ring.wav'); defaults to the phone's sound. */
+  sound?: string;
 }
 
 /**
@@ -37,9 +44,9 @@ export class PushService {
       to,
       title: payload.title,
       body: payload.body,
-      sound: 'default',
+      sound: payload.sound ?? 'default',
       priority: 'high',
-      channelId: 'jobs',
+      channelId: payload.channelId ?? 'jobs',
       data: payload.data ?? {},
     }));
     try {
@@ -50,6 +57,7 @@ export class PushService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(messages),
+        signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
       });
       if (!response.ok) {
         this.logger.warn(`Expo push responded ${response.status}`, 'PushService');
@@ -84,11 +92,21 @@ export class PushService {
       body: JSON.stringify({
         registration_ids: tokens,
         priority: 'high',
-        notification: { title: payload.title, body: payload.body, sound: 'default' },
+        notification: {
+          title: payload.title,
+          body: payload.body,
+          sound: payload.sound ?? 'default',
+          android_channel_id: payload.channelId ?? 'jobs',
+        },
         data: payload.data ?? {},
       }),
+      signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+    }).catch((err: unknown) => {
+      this.logger.warn(`FCM push failed: ${err instanceof Error ? err.message : err}`, 'PushService');
+      return null;
     });
 
+    if (!response) return 0;
     if (!response.ok) {
       this.logger.warn(
         `FCM responded ${response.status} for ${tokens.length} token(s)`,

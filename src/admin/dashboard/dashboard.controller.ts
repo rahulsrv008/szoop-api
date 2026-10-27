@@ -16,4 +16,12 @@ export class AdminDashboardController {
   overview(@Query() query: AdminDashboardQueryDto) {
     return this.dashboardService.overview(query);
   }
+
+  @Get('live-map')
+  @ApiOperation({
+    summary: 'Active customers and recent agent locations in the admin zones',
+  })
+  liveMap() {
+    return this.dashboardService.liveMap();
+  }
 }

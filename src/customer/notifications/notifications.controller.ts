@@ -18,6 +18,8 @@ import { CustomerNotificationsService } from './notifications.service';
 import { ListCustomerNotificationsQueryDto } from './dto/list-notifications.dto';
 import { RegisterCustomerDeviceTokenDto } from './dto/register-device-token.dto';
 import { RemoveCustomerDeviceTokenDto } from './dto/remove-device-token.dto';
+import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
+import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
 
 @ApiTags('customer')
 @CustomerAuth()
@@ -52,6 +54,7 @@ export class CustomerNotificationsController {
     return this.notificationsService.markAllRead(userId);
   }
 
+  @RateLimit(RATE_LIMITS.DEVICE_TOKEN)
   @Post('device-token')
   @HttpCode(200)
   @ApiOperation({ summary: 'Register this device for push notifications' })

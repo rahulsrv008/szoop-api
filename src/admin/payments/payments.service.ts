@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
-import { Payment } from 'src/database/entities';
+import { Payment, PaymentTransaction } from 'src/database/entities';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminPaymentsDto } from './dto/list-payments.dto';
@@ -17,6 +17,7 @@ interface PaymentListRow {
   amount: string;
   paymentMethod: string | null;
   paymentStatus: string;
+  transactionId: string | null;
   paidAt: Date | null;
   createdAt: Date;
 }
@@ -43,6 +44,18 @@ export class AdminPaymentsService {
       .addSelect('payment.amount', 'amount')
       .addSelect('payment.paymentMethod', 'paymentMethod')
       .addSelect('payment.paymentStatus', 'paymentStatus')
+      .addSelect(
+        (subQuery) =>
+          subQuery
+            .select('transaction.gatewayTransactionId')
+            .from(PaymentTransaction, 'transaction')
+            .where('transaction.paymentId = payment.id')
+            .andWhere(`transaction.gatewayName = 'razorpay'`)
+            .andWhere(`transaction.status = 'captured'`)
+            .orderBy('transaction.createdAt', 'DESC')
+            .limit(1),
+        'transactionId',
+      )
       .addSelect('payment.paidAt', 'paidAt')
       .addSelect('payment.createdAt', 'createdAt')
       .orderBy('payment.createdAt', 'DESC')
@@ -89,6 +102,7 @@ export class AdminPaymentsService {
         amount: Number(row.amount),
         paymentMethod: row.paymentMethod,
         paymentStatus: row.paymentStatus,
+        transactionId: row.transactionId,
         paidAt: row.paidAt,
         createdAt: row.createdAt,
       })),

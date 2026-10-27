@@ -1,17 +1,24 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
-import { Customer, User } from 'src/database/entities';
+import { Customer, SupportTicket, User } from 'src/database/entities';
 import { IdentityService } from 'src/common/auth/identity.service';
+import { TokenService } from 'src/common/auth/token.service';
 import { UpdateCustomerProfileDto } from './dto/update-profile.dto';
+import { RequestAccountDeletionDto } from './dto/request-account-deletion.dto';
 
 @Injectable()
 export class CustomerProfileService {
+  private readonly logger = new Logger(CustomerProfileService.name);
+
   constructor(
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
+    @InjectRepository(SupportTicket)
+    private readonly ticketRepo: Repository<SupportTicket>,
     private readonly identity: IdentityService,
+    private readonly tokens: TokenService,
   ) {}
 
   async get(userId: string) {
@@ -37,10 +44,82 @@ export class CustomerProfileService {
     if (dto.gender !== undefined) customer.gender = dto.gender;
     if (dto.dateOfBirth !== undefined) customer.dateOfBirth = dto.dateOfBirth;
     if (dto.profileImage !== undefined)
-      customer.profileImage = dto.profileImage;
+      customer.profileImage = dto.profileImage ? dto.profileImage : null;
 
     await this.customerRepo.save(customer);
     return this.toResponse(customer);
+  }
+
+  /**
+   * Public web form. Records a ticket and blocks the customer if found.
+   * Data is left intact for admin to remove later.
+   */
+  async requestDeletion(dto: RequestAccountDeletionDto) {
+    const user = await this.userRepo.findOne({
+      where: { mobile: dto.mobile, userType: 'customer' },
+    });
+    if (user) {
+      await this.blockWithDeletionRequest(user, 'web', dto);
+    }
+
+    this.logger.log(`Szoop account-deletion request recorded for ${dto.mobile}`);
+    return {
+      received: true,
+      message:
+        'If a Szoop customer account exists for this number, it is marked deleted. Signing in again starts a new customer.',
+    };
+  }
+
+  async deleteAccount(userId: string) {
+    const customer = await this.identity.requireCustomer(userId);
+    await this.blockWithDeletionRequest(customer.user, 'app');
+    return { requested: true, deleted: true };
+  }
+
+  private async blockWithDeletionRequest(
+    user: User,
+    source: 'app' | 'web',
+    extra?: Pick<RequestAccountDeletionDto, 'name' | 'email' | 'note'>,
+  ) {
+    const open = await this.ticketRepo.findOne({
+      where: {
+        userId: user.id,
+        subject: 'Szoop account deletion request',
+        status: 'OPEN',
+      },
+      select: ['id'],
+    });
+    if (!open) {
+      await this.ticketRepo.save(
+        this.ticketRepo.create({
+          userId: user.id,
+          app: 'customer',
+          subject: 'Szoop account deletion request',
+          description: [
+            `${source === 'app' ? 'In-app' : 'Web'} deletion request for Szoop customer ${user.mobile}.`,
+            'Account marked deleted. Data kept for admin. A later login on this number starts a new customer.',
+            extra?.name ? `Name: ${extra.name}` : null,
+            extra?.email ? `Email: ${extra.email}` : null,
+            extra?.note ? `Note: ${extra.note}` : null,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          priority: 'HIGH',
+          status: 'OPEN',
+        }),
+      );
+    }
+
+    if (user.isActive || !user.deletedAt) {
+      user.isActive = false;
+      user.deletedAt = user.deletedAt ?? new Date();
+      await this.userRepo.save(user);
+      await this.tokens.revokeAllForSubject({
+        sub: user.id,
+        role: 'customer',
+        phone: user.mobile,
+      });
+    }
   }
 
   private toResponse(customer: Customer) {

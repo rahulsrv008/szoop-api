@@ -1,9 +1,10 @@
 /**
  * Postgres `date` columns come back as 'YYYY-MM-DD' and `time` columns as
  * 'HH:MM:SS', so the agent modules build and compare them as plain strings.
- * Everything below reads the server's local calendar, which is what Postgres
- * CURRENT_DATE uses — going through UTC would shift "today" by a day for the
- * first 5.5 hours of every IST morning.
+ * Everything below reads the process's local calendar, which
+ * src/config/timezone.ts pins to India time whatever the host's zone — going
+ * through UTC would shift "today" by a day for the first 5.5 hours of every
+ * IST morning.
  */
 
 export function toDateString(value: Date) {

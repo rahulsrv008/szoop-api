@@ -8,6 +8,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import type { NotificationApp } from './notification';
 import { User } from './user';
 
 /** FCM registration tokens, one row per install. */
@@ -32,6 +33,10 @@ export class DeviceToken {
 
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
+
+  /** Which app this belongs to, so the customer and agent apps never get each other's. Null: older rows. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  app: NotificationApp | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
