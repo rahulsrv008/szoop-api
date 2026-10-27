@@ -23,7 +23,6 @@ import { AdminSettingsModule } from './settings/settings.module';
 import { AdminReferralsModule } from './referrals/referrals.module';
 import { AdminCouponRulesModule } from './coupon-rules/coupon-rules.module';
 import { AdminHomeContentModule } from './home-content/home-content.module';
-import { AdminCronModule } from './cron/cron.module';
 
 /** Admin Web (Angular) — everything under /api/v1/admin/*. */
 @Module({
@@ -52,7 +51,6 @@ import { AdminCronModule } from './cron/cron.module';
     AdminReferralsModule,
     AdminCouponRulesModule,
     AdminHomeContentModule,
-    AdminCronModule,
   ],
 })
 export class AdminModule {}

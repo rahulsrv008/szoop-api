@@ -22,6 +22,7 @@ import { NotificationDispatchService } from 'src/common/services/notification-di
 import { BookingClosureService, couponNote } from 'src/common/booking/booking-closure.service';
 import { PAYMENT_WINDOW_MINUTES } from 'src/common/booking/booking-status';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
+import { BookingExpiryService } from 'src/common/booking/booking-expiry.service';
 import { h3CellsWithinKm } from 'src/common/geo/geo.util';
 import { AgentSkillsService } from 'src/agent/skills/skills.service';
 import { EligibilityService, pairKey } from './eligibility.service';
@@ -101,6 +102,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     private readonly dbPool: DbPoolMonitor,
     private readonly closure: BookingClosureService,
     private readonly heldJobs: HeldJobsService,
+    private readonly expiry: BookingExpiryService,
   ) {}
 
   async onModuleInit() {
@@ -161,6 +163,7 @@ export class DispatchService implements OnModuleInit, OnModuleDestroy {
     if (this.ticking) return { processed: 0 };
     this.ticking = true;
     try {
+      await this.step('expire stale bookings', () => this.expiry.expireStale()).catch(() => undefined);
       await this.step('settle closed jobs', () => this.settleClosedJobs());
       await this.step('release orphaned jobs', () => this.releaseOrphanedJobs());
       await this.step('void unpaid requests', () => this.voidUnpaidRequests());
