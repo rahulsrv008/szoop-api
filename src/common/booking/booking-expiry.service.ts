@@ -2,8 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThan, In, Repository } from 'typeorm';
 import { Booking, BookingStatus, Payment } from 'src/database/entities';
-import { BookingHistoryService } from './booking-history.service';
-import { NotificationDispatchService } from '../services/notification-dispatch.service';
+import { BookingHistoryService } from 'src/common/booking/booking-history.service';
+import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 
 /**
  * Expires bookings that are still in a pre-assignment status but whose
