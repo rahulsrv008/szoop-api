@@ -30,6 +30,25 @@ export class CustomerTrackingService {
     });
     if (!booking) throw new NotFoundException('Booking not found');
 
+    if (!booking.agentId) {
+      return {
+        bookingId: booking.id,
+        bookingNumber: booking.bookingNumber,
+        status: booking.status,
+        agentId: null,
+        live: false,
+        lastPing: null,
+        destination: null,
+        distanceKm: null,
+        etaMinutes: null,
+        etaSource: null,
+        routeDistanceKm: null,
+        durationMinutes: booking.durationMinutes,
+        startedAt: null,
+        canReplaceExpert: false,
+      };
+    }
+
     let lastPing = await this.locationRepo.findOne({
       where: { bookingId: booking.id },
       order: { recordedAt: 'DESC' },

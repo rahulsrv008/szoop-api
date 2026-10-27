@@ -19,6 +19,7 @@ export class JwtAuthGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<{
       headers: Record<string, string | undefined>;
       user?: AuthUser;
+      url?: string;
     }>();
 
     const header = req.headers?.authorization;
@@ -27,7 +28,10 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     const user = this.tokens.verifyAccessToken(header.slice(7));
-    await this.identity.assertActive(user);
+    const isLogout = req.url?.includes('/logout');
+    if (!isLogout) {
+      await this.identity.assertActive(user);
+    }
     req.user = user;
     return true;
   }
