@@ -19,6 +19,7 @@ import { AdminReportsModule } from './reports/reports.module';
 import { AdminNotificationsModule } from './notifications/notifications.module';
 import { AdminSettingsModule } from './settings/settings.module';
 import { AdminHomeContentModule } from './home-content/home-content.module';
+import { AdminCronModule } from './cron/cron.module';
 
 /** Admin Web (Angular) — everything under /api/v1/admin/*. */
 @Module({
@@ -43,6 +44,7 @@ import { AdminHomeContentModule } from './home-content/home-content.module';
     AdminNotificationsModule,
     AdminSettingsModule,
     AdminHomeContentModule,
+    AdminCronModule,
   ],
 })
 export class AdminModule {}

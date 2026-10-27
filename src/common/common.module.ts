@@ -12,6 +12,7 @@ import {
   DeviceToken,
   Notification,
   OtpVerification,
+  Payment,
   RefreshToken,
   ServiceArea,
   ServiceZoneArea,
@@ -24,6 +25,7 @@ import { OtpService } from './auth/otp.service';
 import { AuditService } from './services/audit.service';
 import { NotificationDispatchService } from './services/notification-dispatch.service';
 import { BookingHistoryService } from './booking/booking-history.service';
+import { BookingExpiryService } from './booking/booking-expiry.service';
 import { SettingsService } from './services/settings.service';
 import { ZoneResolverService } from './services/zone-resolver.service';
 import { AdminAccessService } from './auth/admin-access';
@@ -50,6 +52,7 @@ import { AdminAccessService } from './auth/admin-access';
       AuditLog,
       Booking,
       BookingStatusHistory,
+      Payment,
       SystemSetting,
       ServiceArea,
       ServiceZoneArea,
@@ -62,6 +65,7 @@ import { AdminAccessService } from './auth/admin-access';
     AuditService,
     NotificationDispatchService,
     BookingHistoryService,
+    BookingExpiryService,
     SettingsService,
     ZoneResolverService,
     AdminAccessService,
@@ -73,6 +77,7 @@ import { AdminAccessService } from './auth/admin-access';
     AuditService,
     NotificationDispatchService,
     BookingHistoryService,
+    BookingExpiryService,
     SettingsService,
     ZoneResolverService,
     AdminAccessService,

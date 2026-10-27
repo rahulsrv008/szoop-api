@@ -12,6 +12,7 @@ const BOOKING_STATUSES: BookingStatus[] = [
   'ongoing',
   'completed',
   'cancelled',
+  'expired',
 ];
 
 export class ListCustomerBookingsQueryDto extends IntersectionType(

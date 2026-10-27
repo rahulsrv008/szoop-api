@@ -65,6 +65,7 @@ export const ROUTES = {
     NOTIFICATIONS: 'admin/notifications',
     SETTINGS: 'admin/settings',
     HOME_CONTENT: 'admin/home-content',
+    CRON: 'admin/cron',
   },
 
   WEBHOOKS: {

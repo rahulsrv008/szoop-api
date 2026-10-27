@@ -24,6 +24,7 @@ import { Rating } from './rating';
  * Booking state machine (CleanIt STG):
  * finding → paid → accepted → arriving → ongoing → completed
  * cancelled can happen before start
+ * expired: no agent was assigned before the slot passed (system-set, never by the customer)
  */
 export type BookingStatus =
   | 'finding'
@@ -32,7 +33,8 @@ export type BookingStatus =
   | 'arriving'
   | 'ongoing'
   | 'completed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'expired';
 
 @Entity('bookings')
 export class Booking {

@@ -4,15 +4,17 @@ import { BookingStatus } from 'src/database/entities';
 /**
  * finding → paid → accepted → arriving → ongoing → completed
  * cancelled is reachable any time before the service starts.
+ * expired is set by the system when no agent was assigned before the slot passed.
  */
 export const BOOKING_TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
-  finding: ['paid', 'cancelled'],
-  paid: ['accepted', 'cancelled'],
+  finding: ['paid', 'cancelled', 'expired'],
+  paid: ['accepted', 'cancelled', 'expired'],
   accepted: ['arriving', 'ongoing', 'cancelled'],
   arriving: ['ongoing', 'cancelled'],
   ongoing: ['completed'],
   completed: [],
   cancelled: [],
+  expired: [],
 };
 
 /** Statuses where the booking date/time can still be moved. */
