@@ -317,7 +317,7 @@ describe('Agent jobs', () => {
       assert.equal(summary.last7Days.length, 7);
       assert.equal(summary.last7Days[6].jobs, 3);
       assert.deepEqual(summary.salary.current, {
-        month: now.getMonth() + 1, year: now.getFullYear(), fixedSalary: 18000, incentive: 1500, deductions: 500, netSalary: 19000, status: 'PENDING',
+        month: now.getMonth() + 1, year: now.getFullYear(), fixedSalary: 18000, incentive: 1500, referralBonus: 0, deductions: 500, netSalary: 19000, status: 'PENDING',
       });
       assert.equal(summary.salary.past.length, 1);
       assert.equal(summary.salary.past[0].netSalary, 19200);

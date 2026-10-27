@@ -4,6 +4,8 @@ import {
   Admin,
   AdminZone,
   Agent,
+  AgentReferral,
+  AgentReferralReward,
   AuditLog,
   Booking,
   BookingStatusHistory,
@@ -32,6 +34,8 @@ import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
 import { ServiceabilityService } from 'src/common/services/serviceability.service';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { WalletService } from 'src/common/services/wallet.service';
+import { ReferralService } from 'src/common/referrals/referral.service';
+import { ReferralRewardsService } from 'src/common/referrals/referral-rewards.service';
 import { BookingClosureService } from 'src/common/booking/booking-closure.service';
 import { IntegrationsModule } from 'src/integrations/integrations.module';
 import { RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
@@ -65,6 +69,8 @@ import { RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
       UpcomingCity,
       CityWaitlist,
       WalletTransaction,
+      AgentReferral,
+      AgentReferralReward,
     ]),
   ],
   providers: [
@@ -79,6 +85,8 @@ import { RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
     ServiceabilityService,
     AdminAccessService,
     WalletService,
+    ReferralService,
+    ReferralRewardsService,
     BookingClosureService,
     RateLimitStats,
   ],
@@ -94,6 +102,8 @@ import { RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
     ServiceabilityService,
     AdminAccessService,
     WalletService,
+    ReferralService,
+    ReferralRewardsService,
     BookingClosureService,
     RateLimitStats,
   ],

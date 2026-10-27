@@ -51,6 +51,7 @@ export const ROUTES = {
     RATINGS: 'agent/ratings',
     NOTIFICATIONS: 'agent/notifications',
     SUPPORT: 'agent/support',
+    REFERRALS: 'agent/referrals',
   },
 
   ADMIN: {
@@ -76,6 +77,7 @@ export const ROUTES = {
     REPORTS: 'admin/reports',
     NOTIFICATIONS: 'admin/notifications',
     SETTINGS: 'admin/settings',
+    REFERRALS: 'admin/referrals',
     COUPON_RULES: 'admin/coupon-rules',
     HOME_CONTENT: 'admin/home-content',
   },

@@ -5,7 +5,7 @@ import { PaginationQueryDto } from 'src/common/dto/pagination.dto';
 export const AGENT_APPROVAL_STATUSES = ['PENDING', 'APPROVED', 'REJECTED'];
 export const AGENT_STATUSES = ['PENDING', 'ACTIVE', 'SUSPENDED', 'INACTIVE'];
 
-/** `search` is inherited from PaginationQueryDto and matches name/mobile. */
+/** `search` is inherited from PaginationQueryDto and matches name/mobile/employee ID. */
 export class ListAdminAgentsDto extends PaginationQueryDto {
   @ApiPropertyOptional({ enum: AGENT_APPROVAL_STATUSES })
   @IsOptional()

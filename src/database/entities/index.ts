@@ -33,6 +33,14 @@ export { Payment } from './payment';
 export type { PaymentStatus } from './payment';
 export { PaymentTransaction } from './payment-transaction';
 export { AgentEarning } from './agent-earning';
+export { AgentReferral } from './agent-referral';
+export type { AgentReferralStatus } from './agent-referral';
+export { AgentReferralReward } from './agent-referral-reward';
+export type {
+  ReferralRewardReason,
+  ReferralRewardStatus,
+  ReferralRewardType,
+} from './agent-referral-reward';
 export { AgentIncentive } from './agent-incentive';
 export { SalaryRecord } from './salary-record';
 export { Rating } from './rating';
