@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Admin, Agent, Customer, User, UserType } from 'src/database/entities';
@@ -16,7 +21,7 @@ export class IdentityService {
     private readonly customerRepo: Repository<Customer>,
     @InjectRepository(Agent) private readonly agentRepo: Repository<Agent>,
     @InjectRepository(Admin) private readonly adminRepo: Repository<Admin>,
-  ) {}
+  ) { }
 
   async findOrCreateUser(mobile: string, role: UserType) {
     let user = await this.userRepo.findOne({ where: { mobile } });
