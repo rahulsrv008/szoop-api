@@ -23,6 +23,8 @@ import { Rating } from './rating';
 /**
  * Booking state machine (CleanIt STG):
  * finding → paid → accepted → arriving → ongoing → completed
+ * cancelled can happen before start
+ * expired: no agent was assigned before the slot passed (system-set, never by the customer)
  * cancelled can happen before start; expired when no agent took a paid job in time
  */
 export type BookingStatus =

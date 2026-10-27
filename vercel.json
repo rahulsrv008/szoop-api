@@ -10,5 +10,11 @@
   },
   "rewrites": [
     { "source": "/(.*)", "destination": "/api?__path=/$1" }
+  ],
+  "crons": [
+    {
+      "path": "/api/v1/admin/cron/expire-bookings",
+      "schedule": "*/15 * * * *"
+    }
   ]
 }

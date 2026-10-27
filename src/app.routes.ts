@@ -80,6 +80,7 @@ export const ROUTES = {
     REFERRALS: 'admin/referrals',
     COUPON_RULES: 'admin/coupon-rules',
     HOME_CONTENT: 'admin/home-content',
+    CRON: 'admin/cron',
   },
 
   WEBHOOKS: {

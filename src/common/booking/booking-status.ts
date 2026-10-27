@@ -4,10 +4,10 @@ import { BookingStatus } from 'src/database/entities';
 /**
  * finding → paid → accepted → arriving → ongoing → completed
  * cancelled is reachable any time before the service starts.
- * expired: a paid job no agent took in time (see DispatchService).
+ * expired is set by the system when no agent was assigned before the slot passed.
  */
 export const BOOKING_TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
-  finding: ['paid', 'cancelled'],
+  finding: ['paid', 'cancelled', 'expired'],
   paid: ['accepted', 'cancelled', 'expired'],
   accepted: ['arriving', 'ongoing', 'cancelled'],
   arriving: ['ongoing', 'cancelled'],

@@ -15,6 +15,7 @@ import {
   DeviceToken,
   Notification,
   OtpVerification,
+  Payment,
   RefreshToken,
   ServiceArea,
   ServiceZoneArea,
@@ -23,6 +24,7 @@ import {
   User,
   WalletTransaction,
 } from 'src/database/entities';
+import { BookingExpiryService } from './booking/booking-expiry.service';
 import { IdentityService } from 'src/common/auth/identity.service';
 import { TokenService } from 'src/common/auth/token.service';
 import { OtpService } from 'src/common/auth/otp.service';
@@ -63,6 +65,7 @@ import { RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
       AuditLog,
       Booking,
       BookingStatusHistory,
+      Payment,
       SystemSetting,
       ServiceArea,
       ServiceZoneArea,
@@ -80,6 +83,7 @@ import { RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
     AuditService,
     NotificationDispatchService,
     BookingHistoryService,
+    BookingExpiryService,
     SettingsService,
     ZoneResolverService,
     ServiceabilityService,
@@ -97,6 +101,7 @@ import { RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
     AuditService,
     NotificationDispatchService,
     BookingHistoryService,
+    BookingExpiryService,
     SettingsService,
     ZoneResolverService,
     ServiceabilityService,
