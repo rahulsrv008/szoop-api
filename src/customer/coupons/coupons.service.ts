@@ -54,7 +54,7 @@ export class CustomerCouponsService {
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
     private readonly eligibilityService: CouponEligibilityService,
-  ) {}
+  ) { }
 
   private async requireCustomer(userId: string): Promise<Customer> {
     const customer = await this.customerRepo.findOne({ where: { userId } });
@@ -67,10 +67,13 @@ export class CustomerCouponsService {
    * Dynamically filters based on saved coupon eligibility rules and service domain.
    */
   async listAvailable(
-    userId: string,
+    userId?: string,
     service?: 'CLEANING' | 'COOKING' | 'SALON',
   ): Promise<CustomerCouponItem[]> {
-    const customer = await this.requireCustomer(userId);
+    let customer: Customer | null = null;
+    if (userId) {
+      customer = await this.customerRepo.findOne({ where: { userId } });
+    }
     const now = new Date();
 
     // 1. Fetch all currently active coupons
@@ -95,13 +98,15 @@ export class CustomerCouponsService {
     const allActive = await qb.getMany();
 
     // 2. Fetch all coupon IDs this customer has used
-    const usages = await this.couponUsageRepo.find({
-      where: { customerId: customer.id },
-      select: ['couponId'],
-    });
     const usageCounts = new Map<string, number>();
-    for (const u of usages) {
-      usageCounts.set(u.couponId, (usageCounts.get(u.couponId) ?? 0) + 1);
+    if (customer) {
+      const usages = await this.couponUsageRepo.find({
+        where: { customerId: customer.id },
+        select: ['couponId'],
+      });
+      for (const u of usages) {
+        usageCounts.set(u.couponId, (usageCounts.get(u.couponId) ?? 0) + 1);
+      }
     }
 
     const result: CustomerCouponItem[] = [];
@@ -109,15 +114,17 @@ export class CustomerCouponsService {
     for (const coupon of allActive) {
       const timesUsed = usageCounts.get(coupon.id) ?? 0;
       const perLimit = coupon.perCustomerLimit ?? 1;
-      if (timesUsed >= perLimit) {
+      if (customer && timesUsed >= perLimit) {
         // Customer already used their allowed redemptions (expired for this customer)
         continue;
       }
 
-      const isDirect = coupon.customerId === customer.id;
-      const isAssignedInList = coupon.assignedCustomers?.some(
-        (ac) => ac.customerId === customer.id,
-      );
+      const isDirect = customer ? coupon.customerId === customer.id : false;
+      const isAssignedInList = customer
+        ? coupon.assignedCustomers?.some(
+            (ac) => ac.customerId === customer.id,
+          )
+        : false;
       const hasRestrictions =
         Boolean(coupon.customerId) ||
         (coupon.assignedCustomers && coupon.assignedCustomers.length > 0);
@@ -131,7 +138,7 @@ export class CustomerCouponsService {
       if (service) {
         if (coupon.eligibilityRule) {
           const ruleCheck = await this.eligibilityService.evaluateRule(
-            customer.id,
+            customer?.id ?? '',
             coupon.eligibilityRule,
             service,
           );
@@ -153,7 +160,7 @@ export class CustomerCouponsService {
         }
       } else if (coupon.eligibilityRule) {
         const ruleCheck = await this.eligibilityService.evaluateRule(
-          customer.id,
+          customer?.id ?? '',
           coupon.eligibilityRule,
         );
         if (!ruleCheck.eligible) {
@@ -161,21 +168,26 @@ export class CustomerCouponsService {
         }
       }
 
-      result.push({
-        id: coupon.id,
-        code: coupon.code,
-        description: coupon.description,
-        discountType: coupon.discountType.toUpperCase() as 'PERCENT' | 'FLAT',
-        discountValue: Number(coupon.discountValue),
-        maxDiscount: coupon.maxDiscount ? Number(coupon.maxDiscount) : null,
-        minOrderAmount: coupon.minOrderAmount
-          ? Number(coupon.minOrderAmount)
-          : null,
-        validUntil: coupon.validUntil ? coupon.validUntil.toISOString() : null,
-        isAssigned: isDirect || Boolean(isAssignedInList),
-        applicableServices: coupon.eligibilityRule?.applicableServices ?? ['ALL'],
-        eligibilityRuleName: coupon.eligibilityRule?.name ?? null,
-      });
+      try {
+        result.push({
+          id: coupon.id,
+          code: coupon.code,
+          description: coupon.description ?? null,
+          discountType: (coupon.discountType || 'PERCENT').toUpperCase() as 'PERCENT' | 'FLAT',
+          discountValue: Number(coupon.discountValue || 0),
+          maxDiscount: coupon.maxDiscount ? Number(coupon.maxDiscount) : null,
+          minOrderAmount: coupon.minOrderAmount
+            ? Number(coupon.minOrderAmount)
+            : null,
+          validUntil: coupon.validUntil ? coupon.validUntil.toISOString() : null,
+          isAssigned: isDirect || Boolean(isAssignedInList),
+          applicableServices: coupon.eligibilityRule?.applicableServices ?? ['ALL'],
+          eligibilityRuleName: coupon.eligibilityRule?.name ?? null,
+        });
+      } catch (err) {
+        // Skip any malformed coupon item rather than failing the whole API
+        continue;
+      }
     }
 
     return result;
@@ -287,13 +299,14 @@ export class CustomerCouponsService {
     }
 
     // Compute discount
-    const value = Number(coupon.discountValue);
+    const value = Number(coupon.discountValue || 0);
+    const dType = (coupon.discountType || 'PERCENT').toUpperCase() as 'PERCENT' | 'FLAT';
     let discount =
-      coupon.discountType.toUpperCase() === 'PERCENT'
+      dType === 'PERCENT'
         ? (subtotal * value) / 100
         : value;
 
-    if (coupon.maxDiscount !== null) {
+    if (coupon.maxDiscount !== null && coupon.maxDiscount !== undefined) {
       discount = Math.min(discount, Number(coupon.maxDiscount));
     }
     discount = round2(Math.min(discount, subtotal));
@@ -303,8 +316,8 @@ export class CustomerCouponsService {
       valid: true,
       couponId: coupon.id,
       code: coupon.code,
-      description: coupon.description,
-      discountType: coupon.discountType.toUpperCase() as 'PERCENT' | 'FLAT',
+      description: coupon.description ?? null,
+      discountType: dType,
       discountValue: value,
       discountAmount: discount,
       subtotal: round2(subtotal),

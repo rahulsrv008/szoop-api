@@ -99,9 +99,12 @@ export class CouponEligibilityService {
     // 1. Service Applicability Check
     if (bookingService) {
       const targetService = bookingService.toUpperCase().trim();
-      const applicable = (rule.applicableServices || ['ALL']).map((s) =>
-        s.toUpperCase().trim(),
-      );
+      const rawApplicable = Array.isArray(rule.applicableServices) && rule.applicableServices.length > 0
+        ? rule.applicableServices
+        : ['ALL'];
+      const applicable = rawApplicable
+        .filter(Boolean)
+        .map((s) => String(s).toUpperCase().trim());
       const matchesService =
         applicable.includes('ALL') || applicable.includes(targetService);
       if (!matchesService) {
