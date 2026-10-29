@@ -20,10 +20,15 @@ if (!mode || !rest.length) {
   process.exit(1);
 }
 
+const wasmFlag = '--disable-wasm-trap-handler';
+const existingNodeOptions = process.env.NODE_OPTIONS || '';
 const env = {
   ...process.env,
   APP_ENV: mode,
   NODE_ENV: mode === 'development' ? 'development' : 'production',
+  NODE_OPTIONS: existingNodeOptions.includes(wasmFlag)
+    ? existingNodeOptions
+    : [existingNodeOptions, wasmFlag].filter(Boolean).join(' '),
 };
 console.log(`[env] APP_ENV=${mode}`);
 const child = spawn(rest[0], rest.slice(1), { stdio: 'inherit', env, shell: true });
