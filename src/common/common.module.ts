@@ -24,13 +24,13 @@ import {
   User,
   WalletTransaction,
 } from 'src/database/entities';
-import { BookingExpiryService } from './booking/booking-expiry.service';
 import { IdentityService } from 'src/common/auth/identity.service';
 import { TokenService } from 'src/common/auth/token.service';
 import { OtpService } from 'src/common/auth/otp.service';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { BookingHistoryService } from 'src/common/booking/booking-history.service';
+import { BookingExpiryService } from 'src/common/booking/booking-expiry.service';
 import { SettingsService } from 'src/common/services/settings.service';
 import { ZoneResolverService } from 'src/common/services/zone-resolver.service';
 import { ServiceabilityService } from 'src/common/services/serviceability.service';

@@ -205,7 +205,7 @@ export async function createServer(listen = !process.env.VERCEL) {
   try {
     await app.listen(port, '0.0.0.0');
     customLoggerService.log(
-      `clearit-be (${appEnv}) listening on ${await app.getUrl()}`,
+      `clearit-be (${appEnv}) listening on ${await app.getUrl()} db=${process.env.DB_HOST}`,
       'bootstrap',
     );
     customLoggerService.log(

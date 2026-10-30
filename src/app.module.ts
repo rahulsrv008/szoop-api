@@ -21,11 +21,11 @@ import { RateLimitModule, RateLimitStorageModule } from './common/rate-limit/rat
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath:
-        process.env.NODE_ENV === 'production'
+        process.env.APP_ENV === 'production' || process.env.NODE_ENV === 'production'
           ? ['.env.production', '.env']
-          : process.env.NODE_ENV === 'staging'
-            ? ['.env.stg', '.env']
-            : ['.env'],
+          : process.env.APP_ENV === 'uat' || process.env.NODE_ENV === 'staging'
+            ? ['.env.uat', '.env.stg', '.env']
+            : ['.env.development', '.env'],
     }),
     DatabaseModule,
     IntegrationsModule,

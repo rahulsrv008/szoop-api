@@ -13,16 +13,20 @@ Aligned to **CleanIt architecture / STG roadmap**: Auth OTP, Users, Addresses, B
 PostgreSQL schema is the full 32-table design (customers, agents, services, bookings, payments, earnings, coupons, support, etc.). Run `sql/001_full_schema.sql` in pgAdmin on the `clearit` database. Keep `DB_SYNC=false`.
 
 
-## Staging
+## Environments
 
-STG is meant to run compiled JS against the Aiven (or other hosted) Postgres, with schema applied from `sql/001_full_schema.sql` — **not** TypeORM `synchronize`.
+| Mode | Command | Database |
+|---|---|---|
+| development | `npm run start:dev` | Aiven |
+| uat | `npm run start:uat` | Aiven |
+| production | `npm run start:prod` | Neon |
 
 ```bash
-cp .env.stg.example .env.stg
-# fill DB_*, JWT_SECRET (>= 24 chars), ALLOWED_ORIGINS, APP_URL
-npm install
-npm run build
-NODE_ENV=staging npm run start:stg
+cp .env.development.example .env.development
+cp .env.uat.example .env.uat
+cp .env.production.example .env.production
+# fill DB_* and secrets in each file
+npm run start:dev
 ```
 
 Or Docker:
