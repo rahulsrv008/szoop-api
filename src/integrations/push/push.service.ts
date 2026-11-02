@@ -63,8 +63,19 @@ export class PushService {
         this.logger.warn(`Expo push responded ${response.status}`, 'PushService');
         return 0;
       }
-      this.logger.log(`Lock-screen push sent to ${tokens.length} device(s): ${payload.title}`, 'PushService');
-      return tokens.length;
+      const body = (await response.json()) as { data: { status: string; message?: string; details?: unknown }[] };
+      const results = Array.isArray(body?.data) ? body.data : [];
+      const errors = results.filter((r) => r.status === 'error');
+      if (errors.length) {
+        this.logger.warn(
+          `Expo push: ${errors.length}/${tokens.length} message(s) failed — ` +
+            errors.map((e) => e.message ?? JSON.stringify(e.details)).join('; '),
+          'PushService',
+        );
+      }
+      const sent = tokens.length - errors.length;
+      if (sent > 0) this.logger.log(`Lock-screen push sent to ${sent} device(s): ${payload.title}`, 'PushService');
+      return sent;
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Expo push failed';
       this.logger.warn(`Expo push failed: ${error}`, 'PushService');
