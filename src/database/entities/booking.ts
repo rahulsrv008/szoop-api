@@ -128,6 +128,9 @@ export class Booking {
   @Column({ name: 'start_otp', type: 'varchar', length: 20, nullable: true })
   startOtp: string | null;
 
+  @Column({ name: 'end_otp', type: 'varchar', length: 20, nullable: true })
+  endOtp: string | null;
+
   @Column({ type: 'text', nullable: true })
   notes: string | null;
 

@@ -633,6 +633,7 @@ export class CustomerBookingsService {
       planType: booking.planType,
       planTitle: booking.planTitle,
       startOtp: booking.startOtp,
+      endOtp: booking.status === 'ongoing' ? booking.endOtp : null,
       visits: visitsByBooking.get(booking.id) ?? [],
       createdAt: booking.createdAt,
       updatedAt: booking.updatedAt,
@@ -688,6 +689,8 @@ export class CustomerBookingsService {
       planTitle: booking.planTitle,
       // Handed to the agent on arrival to start the job.
       startOtp: booking.startOtp,
+      // Shown to the customer while the job is ongoing; agent enters it to complete.
+      endOtp: booking.status === 'ongoing' ? booking.endOtp : null,
       visits: (await this.visitsFor([booking])).get(booking.id) ?? [],
       serviceAreaId: booking.serviceAreaId,
       items: (booking.items ?? []).map((item) => ({

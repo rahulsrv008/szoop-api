@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { randomInt } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   Between,
@@ -504,11 +505,12 @@ export class AgentBookingsService {
       await this.visitRepo.save(visit);
     }
 
+    booking.endOtp = String(randomInt(1000, 10000));
     await this.history.transition(booking, 'ongoing', userId);
 
     await this.notifyCustomer(booking, {
       title: 'Service started',
-      message: `Work has started on booking ${booking.bookingNumber}.`,
+      message: `Work has started on booking ${booking.bookingNumber}. Share the end OTP with the expert when done.`,
       type: 'booking_started',
     });
 
@@ -527,6 +529,9 @@ export class AgentBookingsService {
     if (booking.status === 'completed') return this.toStatusResponse(booking);
     if (booking.status !== 'ongoing') {
       throw new BadRequestException('Start the job with the customer OTP before completing it');
+    }
+    if (!booking.endOtp || booking.endOtp !== dto.otp) {
+      throw new BadRequestException('Incorrect end OTP');
     }
     // Pay after service: closed only once the customer has paid, unless the
     // agent reports they refused; then the amount is owed in their wallet.
