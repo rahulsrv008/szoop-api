@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   OneToOne,
   OneToMany,
+  Index,
 } from 'typeorm';
 import { Customer } from './customer';
 import { Agent } from './agent';
@@ -17,12 +18,16 @@ import { DeviceToken } from './device-token';
 export type UserType = 'customer' | 'agent' | 'admin';
 
 @Entity('users')
+@Index('uq_users_mobile_app_code', ['mobile', 'appCode'], { unique: true })
 export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'varchar', length: 15, unique: true })
+  @Column({ type: 'varchar', length: 15 })
   mobile: string;
+
+  @Column({ name: 'app_code', type: 'varchar', length: 20, default: 'SZOOP' })
+  appCode: 'SZOOP' | 'AIRA';
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   email: string | null;

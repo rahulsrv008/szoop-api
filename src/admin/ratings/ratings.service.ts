@@ -6,6 +6,7 @@ import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminRatingsDto } from './dto/list-ratings.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 interface RatingListRow {
   id: string;
@@ -31,10 +32,10 @@ export class AdminRatingsService {
     private readonly access: AdminAccessService,
   ) {}
 
-  async list(query: ListAdminRatingsDto) {
+  async list(query: ListAdminRatingsDto, appCode: ClientAppCode = 'SZOOP') {
     const { skip, take } = skipTake(query);
 
-    const rowsQb = this.applyFilters(this.baseQuery(), query)
+    const rowsQb = this.applyFilters(this.baseQuery(appCode), query)
       .select('rating.id', 'id')
       .addSelect('rating.rating', 'rating')
       .addSelect('rating.bookingId', 'bookingId')
@@ -56,18 +57,18 @@ export class AdminRatingsService {
       .offset(skip)
       .limit(take);
 
-    const summaryQb = this.applyFilters(this.baseQuery(), query)
+    const summaryQb = this.applyFilters(this.baseQuery(appCode), query)
       .select('COALESCE(AVG(rating.rating), 0)', 'average')
       .addSelect('COUNT(*)::int', 'count');
 
-    const breakdownQb = this.applyFilters(this.baseQuery(), query)
+    const breakdownQb = this.applyFilters(this.baseQuery(appCode), query)
       .select('ROUND(rating.rating)::int', 'star')
       .addSelect('COUNT(*)::int', 'count')
       .groupBy('ROUND(rating.rating)');
 
     const [rows, total, summary, breakdownRows] = await Promise.all([
       rowsQb.getRawMany<RatingListRow>(),
-      this.applyFilters(this.baseQuery(), query).getCount(),
+      this.applyFilters(this.baseQuery(appCode), query).getCount(),
       summaryQb.getRawOne<{ average: string; count: number }>(),
       breakdownQb.getRawMany<{ star: number; count: number }>(),
     ]);
@@ -111,18 +112,18 @@ export class AdminRatingsService {
     };
   }
 
-  async detail(id: string) {
-    const rating = await this.ratingRepo.findOne({
-      where: { id },
-      relations: [
-        'booking',
-        'customer',
-        'customer.user',
-        'agent',
-        'agent.user',
-        'reviews',
-      ],
-    });
+  async detail(id: string, appCode: ClientAppCode = 'SZOOP') {
+    const rating = await this.ratingRepo
+      .createQueryBuilder('rating')
+      .innerJoinAndSelect('rating.booking', 'booking')
+      .innerJoinAndSelect('rating.customer', 'customer')
+      .innerJoinAndSelect('customer.user', 'customerUser')
+      .leftJoinAndSelect('rating.agent', 'agent')
+      .leftJoinAndSelect('agent.user', 'agentUser')
+      .leftJoinAndSelect('rating.reviews', 'reviews')
+      .where('rating.id = :id', { id })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
+      .getOne();
     if (!rating) throw new NotFoundException('Rating not found');
     this.access.assertZone(rating.booking?.serviceAreaId, 'Rating');
 
@@ -167,11 +168,16 @@ export class AdminRatingsService {
   }
 
   /** Moderation: reviews go first because they point at the rating row. */
-  async remove(adminId: string, id: string) {
-    const rating = await this.ratingRepo.findOne({
-      where: { id },
-      relations: ['reviews', 'booking'],
-    });
+  async remove(adminId: string, id: string, appCode: ClientAppCode = 'SZOOP') {
+    const rating = await this.ratingRepo
+      .createQueryBuilder('rating')
+      .innerJoinAndSelect('rating.booking', 'booking')
+      .innerJoin('rating.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
+      .leftJoinAndSelect('rating.reviews', 'reviews')
+      .where('rating.id = :id', { id })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
+      .getOne();
     if (!rating) throw new NotFoundException('Rating not found');
     this.access.assertZone(rating.booking?.serviceAreaId, 'Rating');
 
@@ -205,11 +211,13 @@ export class AdminRatingsService {
     };
   }
 
-  private baseQuery() {
+  private baseQuery(appCode: ClientAppCode) {
     return this.ratingRepo
       .createQueryBuilder('rating')
       .innerJoin('rating.booking', 'booking')
       .innerJoin('rating.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       .innerJoin('rating.agent', 'agent');
   }
 

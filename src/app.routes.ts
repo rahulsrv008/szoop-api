@@ -31,6 +31,7 @@ export const ROUTES = {
     HOME: 'customer/home',
     SERVICEABILITY: 'customer/serviceability',
     COUPONS: 'customer/coupons',
+    AIRA_MENU: 'customer/aira/menu',
   },
 
   AGENT: {
@@ -80,6 +81,7 @@ export const ROUTES = {
     REFERRALS: 'admin/referrals',
     COUPON_RULES: 'admin/coupon-rules',
     HOME_CONTENT: 'admin/home-content',
+    AIRA_MENU: 'admin/aira-menu',
   },
 
   WEBHOOKS: {

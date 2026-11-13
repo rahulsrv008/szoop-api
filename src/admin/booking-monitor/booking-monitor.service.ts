@@ -41,6 +41,7 @@ import {
 } from './booking-monitor.rules';
 import { UpdateMonitorRulesDto } from './dto/update-monitor-rules.dto';
 import { MonitorNudgeDto } from './dto/monitor-nudge.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 /** A job whose slot is older than this is history, not live (the Missed jobs page has it). */
 const LOOKBACK_HOURS = 12;
@@ -164,14 +165,14 @@ export class AdminBookingMonitorService {
     private readonly notifications: NotificationDispatchService,
   ) {}
 
-  async board() {
+  async board(appCode: ClientAppCode = 'SZOOP') {
     // The same request-driven tick the apps' polls run, so on a host without a
     // timer the jobs on screen still expire, get released and move on.
     await this.dispatch.tickFromRequest();
 
     const now = new Date();
-    const rules = await this.rules();
-    const bookings = await this.liveBookings(now, rules);
+    const rules = await this.rules(appCode);
+    const bookings = await this.liveBookings(now, rules, appCode);
     const ids = bookings.map((booking) => booking.id);
     const waitingIds = bookings
       .filter((booking) => booking.status === 'paid' && !booking.agentId)
@@ -249,9 +250,14 @@ export class AdminBookingMonitorService {
     };
   }
 
-  async updateRules(adminId: string, dto: UpdateMonitorRulesDto) {
+  async updateRules(
+    adminId: string,
+    dto: UpdateMonitorRulesDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
     this.access.assertSuperAdmin();
-    const current = await this.rules();
+    const settingKey = this.rulesSettingKey(appCode);
+    const current = await this.rules(appCode);
     const next: MonitorRules = { ...current };
     for (const key of Object.keys(DEFAULT_MONITOR_RULES) as (keyof MonitorRules)[]) {
       const value = dto[key];
@@ -265,7 +271,7 @@ export class AdminBookingMonitorService {
       }
     }
 
-    const saved = await this.settings.set(MONITOR_RULES_SETTING, next, {
+    const saved = await this.settings.set(settingKey, next, {
       description: 'Booking monitor: minutes before a live job turns orange and red',
       updatedBy: adminId,
     });
@@ -274,8 +280,8 @@ export class AdminBookingMonitorService {
       action: 'SETTING_UPDATED',
       entityType: 'system_settings',
       entityId: saved.id,
-      oldData: { settingKey: MONITOR_RULES_SETTING, settingValue: current },
-      newData: { settingKey: MONITOR_RULES_SETTING, settingValue: next },
+      oldData: { settingKey, settingValue: current },
+      newData: { settingKey, settingValue: next },
     });
     return resolveRules(next);
   }
@@ -284,12 +290,22 @@ export class AdminBookingMonitorService {
    * A push + in-app notice to one agent. Zone admins can only nudge agents in
    * their zones, or whoever holds a job in their zones (with that booking).
    */
-  async nudge(adminId: string, dto: MonitorNudgeDto) {
+  async nudge(
+    adminId: string,
+    dto: MonitorNudgeDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
     const agent = await this.agentRepo.findOne({ where: { id: dto.agentId } });
     if (!agent) throw new NotFoundException('Agent not found');
     let booking: Booking | null = null;
     if (dto.bookingId) {
-      booking = await this.bookingRepo.findOne({ where: { id: dto.bookingId } });
+      booking = await this.bookingRepo
+        .createQueryBuilder('booking')
+        .innerJoin('booking.customer', 'customer')
+        .innerJoin('customer.user', 'customerUser')
+        .where('booking.id = :id', { id: dto.bookingId })
+        .andWhere('customerUser.appCode = :appCode', { appCode })
+        .getOne();
       if (!booking || booking.agentId !== agent.id) throw new NotFoundException('Booking not found');
       this.access.assertZone(booking.serviceAreaId, 'Booking');
     } else {
@@ -313,8 +329,16 @@ export class AdminBookingMonitorService {
     return { sent: true };
   }
 
-  private async rules() {
-    return resolveRules(await this.settings.get<unknown>(MONITOR_RULES_SETTING, null));
+  private rulesSettingKey(appCode: ClientAppCode) {
+    return appCode === 'SZOOP'
+      ? MONITOR_RULES_SETTING
+      : `${MONITOR_RULES_SETTING}_AIRA`;
+  }
+
+  private async rules(appCode: ClientAppCode) {
+    return resolveRules(
+      await this.settings.get<unknown>(this.rulesSettingKey(appCode), null),
+    );
   }
 
   // ------------------------------------------------------------ the steps
@@ -677,7 +701,7 @@ export class AdminBookingMonitorService {
    * so the agents panel knows who has work later); plans with a visit around
    * today; and any paid job still waiting for an agent, however far off.
    */
-  private liveBookings(now: Date, rules: MonitorRules) {
+  private liveBookings(now: Date, rules: MonitorRules, appCode: ClientAppCode) {
     const from = toDateString(addMinutes(now, -LOOKBACK_HOURS * 60));
     const ahead = Math.max(scheduledDispatchLeadMinutes(), rules.setOffLeadMinutes) + 5;
     const to = toDateString(addMinutes(now, ahead));
@@ -692,6 +716,7 @@ export class AdminBookingMonitorService {
       .leftJoinAndSelect('booking.items', 'item')
       .leftJoinAndSelect('item.service', 'service')
       .where('booking.status IN (:...statuses)', { statuses: LIVE_STATUSES })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       .andWhere(
         new Brackets((live) =>
           live

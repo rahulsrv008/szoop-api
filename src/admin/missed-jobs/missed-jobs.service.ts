@@ -1,11 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Repository, SelectQueryBuilder } from 'typeorm';
+import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { Agent, AgentMissedJob } from 'src/database/entities';
 import type { MissedJobReason } from 'src/database/entities';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
+import type { ClientAppCode } from 'src/common/types/client-app';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { AdminMissedJobAgentsDto, ListAdminMissedJobsDto, WarnAgentDto } from './dto/missed-jobs.dto';
 
@@ -51,9 +52,9 @@ export class AdminMissedJobsService {
   ) {}
 
   /** One row per agent with misses in the period, worst first. */
-  async agents(query: AdminMissedJobAgentsDto) {
+  async agents(query: AdminMissedJobAgentsDto, appCode: ClientAppCode = 'SZOOP') {
     const { from, to } = range(query);
-    const qb = this.base(from, to)
+    const qb = this.base(from, to, appCode)
       .select('missed.agentId', 'agentId')
       .addSelect('agent.firstName', 'firstName')
       .addSelect('agent.lastName', 'lastName')
@@ -69,7 +70,7 @@ export class AdminMissedJobsService {
       .addSelect('MAX(missed.slot)', 'lastMissedAt')
       // Their last warning ever, not only within the period.
       .addSelect(
-        '(SELECT MAX(w.warned_at) FROM agent_missed_jobs w WHERE w.agent_id = missed.agent_id)',
+        "(SELECT MAX(w.warned_at) FROM agent_missed_jobs w INNER JOIN bookings wb ON wb.id = w.booking_id INNER JOIN customers wc ON wc.id = wb.customer_id INNER JOIN users wu ON wu.id = wc.user_id WHERE w.agent_id = missed.agent_id AND wu.app_code = :appCode)",
         'lastWarnedAt',
       )
       .groupBy('missed.agentId')
@@ -119,9 +120,9 @@ export class AdminMissedJobsService {
   }
 
   /** The missed bookings themselves, newest first. */
-  async list(query: ListAdminMissedJobsDto) {
+  async list(query: ListAdminMissedJobsDto, appCode: ClientAppCode = 'SZOOP') {
     const { from, to } = range(query);
-    const qb = this.base(from, to)
+    const qb = this.base(from, to, appCode)
       .innerJoinAndSelect('missed.booking', 'booking')
       .leftJoinAndSelect('booking.customer', 'customer')
       .addSelect(['agent.id', 'agent.firstName', 'agent.lastName', 'user.mobile'])
@@ -156,11 +157,11 @@ export class AdminMissedJobsService {
   }
 
   /** The standard warning for this agent, for the admin to read (and edit) before sending. */
-  async warningPreview(agentId: string) {
+  async warningPreview(agentId: string, appCode: ClientAppCode = 'SZOOP') {
     const agent = await this.agentRepo.findOne({ where: { id: agentId } });
     if (!agent) throw new NotFoundException('Agent not found');
     this.access.assertAgent(agent);
-    const unwarned = await this.unwarned(agentId);
+    const unwarned = await this.unwarned(agentId, appCode);
     return { agentId, notWarned: unwarned.length, message: defaultWarning(unwarned) };
   }
 
@@ -168,12 +169,17 @@ export class AdminMissedJobsService {
    * Sends the agent a warning (push + in-app) and marks the misses it covers.
    * The default message lists the bookings they haven't been warned about yet.
    */
-  async warn(adminId: string, agentId: string, dto: WarnAgentDto) {
+  async warn(
+    adminId: string,
+    agentId: string,
+    dto: WarnAgentDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
     const agent = await this.agentRepo.findOne({ where: { id: agentId } });
     if (!agent) throw new NotFoundException('Agent not found');
     this.access.assertAgent(agent);
 
-    const unwarned = await this.unwarned(agentId);
+    const unwarned = await this.unwarned(agentId, appCode);
     const message = dto.message?.trim() || defaultWarning(unwarned);
 
     await this.notifications.toUser(agent.userId, {
@@ -201,24 +207,37 @@ export class AdminMissedJobsService {
     return { agentId, warnedJobs: unwarned.length, message, warnedAt };
   }
 
-  private unwarned(agentId: string) {
-    return this.missedRepo.find({
-      where: { agentId, warnedAt: IsNull() },
-      relations: ['booking'],
-      order: { slot: 'DESC' },
-    });
+  private unwarned(agentId: string, appCode: ClientAppCode) {
+    return this.missedRepo
+      .createQueryBuilder('missed')
+      .innerJoinAndSelect('missed.booking', 'booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
+      .where('missed.agentId = :agentId', { agentId })
+      .andWhere('missed.warnedAt IS NULL')
+      .andWhere('customerUser.appCode = :appCode', { appCode })
+      .orderBy('missed.slot', 'DESC')
+      .getMany();
   }
 
   /** Misses in the period, joined to the agent and limited to the admin's zones. */
-  private base(from: string, to: string): SelectQueryBuilder<AgentMissedJob> {
+  private base(
+    from: string,
+    to: string,
+    appCode: ClientAppCode,
+  ): SelectQueryBuilder<AgentMissedJob> {
     const qb = this.missedRepo
       .createQueryBuilder('missed')
       .innerJoin('missed.agent', 'agent')
       .innerJoin('agent.user', 'user')
+      .innerJoin('missed.booking', 'booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .where('missed.slot >= :start AND missed.slot < :end', {
         start: new Date(`${from}T00:00:00`),
         end: new Date(new Date(`${to}T00:00:00`).getTime() + 86_400_000),
-      });
+      })
+      .andWhere('customerUser.appCode = :appCode', { appCode });
     this.access.restrictAgent(qb, 'agent');
     return qb;
   }

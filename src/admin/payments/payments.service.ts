@@ -5,6 +5,7 @@ import { Payment, PaymentTransaction } from 'src/database/entities';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminPaymentsDto } from './dto/list-payments.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 interface PaymentListRow {
   id: string;
@@ -30,10 +31,10 @@ export class AdminPaymentsService {
     private readonly access: AdminAccessService,
   ) {}
 
-  async list(query: ListAdminPaymentsDto) {
+  async list(query: ListAdminPaymentsDto, appCode: ClientAppCode = 'SZOOP') {
     const { skip, take } = skipTake(query);
 
-    const rowsQb = this.applyFilters(this.baseQuery(), query)
+    const rowsQb = this.applyFilters(this.baseQuery(appCode), query)
       .select('payment.id', 'id')
       .addSelect('payment.bookingId', 'bookingId')
       .addSelect('booking.bookingNumber', 'bookingNumber')
@@ -62,7 +63,7 @@ export class AdminPaymentsService {
       .offset(skip)
       .limit(take);
 
-    const totalsQb = this.applyFilters(this.baseQuery(), query)
+    const totalsQb = this.applyFilters(this.baseQuery(appCode), query)
       .select(
         `COALESCE(SUM(CASE WHEN payment.paymentStatus = 'PAID' THEN payment.amount ELSE 0 END), 0)`,
         'collected',
@@ -79,7 +80,7 @@ export class AdminPaymentsService {
 
     const [rows, total, totals] = await Promise.all([
       rowsQb.getRawMany<PaymentListRow>(),
-      this.applyFilters(this.baseQuery(), query).getCount(),
+      this.applyFilters(this.baseQuery(appCode), query).getCount(),
       totalsQb.getRawOne<{
         collected: string;
         pending: string;
@@ -121,11 +122,16 @@ export class AdminPaymentsService {
     };
   }
 
-  async detail(id: string) {
-    const payment = await this.paymentRepo.findOne({
-      where: { id },
-      relations: ['booking', 'customer', 'customer.user', 'transactions'],
-    });
+  async detail(id: string, appCode: ClientAppCode = 'SZOOP') {
+    const payment = await this.paymentRepo
+      .createQueryBuilder('payment')
+      .innerJoinAndSelect('payment.booking', 'booking')
+      .innerJoinAndSelect('payment.customer', 'customer')
+      .innerJoinAndSelect('customer.user', 'customerUser')
+      .leftJoinAndSelect('payment.transactions', 'transactions')
+      .where('payment.id = :id', { id })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
+      .getOne();
     if (!payment) throw new NotFoundException('Payment not found');
     this.access.assertZone(payment.booking?.serviceAreaId, 'Payment');
 
@@ -173,12 +179,13 @@ export class AdminPaymentsService {
     };
   }
 
-  private baseQuery() {
+  private baseQuery(appCode: ClientAppCode) {
     return this.paymentRepo
       .createQueryBuilder('payment')
       .innerJoin('payment.booking', 'booking')
       .innerJoin('payment.customer', 'customer')
-      .innerJoin('customer.user', 'customerUser');
+      .innerJoin('customer.user', 'customerUser')
+      .andWhere('customerUser.appCode = :appCode', { appCode });
   }
 
   private applyFilters(

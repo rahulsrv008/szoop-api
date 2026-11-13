@@ -16,7 +16,11 @@ import { SmsService } from 'src/integrations/sms/sms.service';
 import { maskMobile, RateLimitStats } from 'src/common/rate-limit/rate-limit.stats';
 import type { OtpDeliveryChannel } from 'src/common/types/otp.types';
 
-export type OtpPurpose = 'customer_login' | 'agent_login';
+export type OtpPurpose =
+  | 'customer_login'
+  | 'agent_login'
+  | 'aira_account_deletion'
+  | 'szoop_account_deletion';
 
 export interface OtpChallenge {
   mobile: string;

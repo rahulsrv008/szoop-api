@@ -18,6 +18,7 @@ import { AdminAccessService } from 'src/common/auth/admin-access';
 import { ACTIVE_STATUSES } from 'src/common/booking/booking-status';
 import { AdminDashboardQueryDto } from './dto/dashboard-query.dto';
 import { todayString } from 'src/agent/shared/date.util';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 /** Priorities the dashboard counts as "needs attention now". */
 const HIGH_PRIORITIES = ['HIGH', 'URGENT'];
@@ -50,19 +51,22 @@ export class AdminDashboardService {
     private readonly access: AdminAccessService,
   ) {}
 
-  async overview(query: AdminDashboardQueryDto) {
+  async overview(
+    query: AdminDashboardQueryDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
     const range = this.resolveRange(query);
 
     const [customers, agents, bookings, revenue, ratings, support, kyc, team] =
       await Promise.all([
-        this.customerStats(range),
+        this.customerStats(range, appCode),
         this.agentStats(range),
-        this.bookingStats(range),
-        this.revenueStats(range),
-        this.ratingStats(),
-        this.supportStats(),
+        this.bookingStats(range, appCode),
+        this.revenueStats(range, appCode),
+        this.ratingStats(appCode),
+        this.supportStats(appCode),
         this.kycStats(),
-        this.teamEarnings(range),
+        this.teamEarnings(range, appCode),
       ]);
 
     return {
@@ -78,7 +82,7 @@ export class AdminDashboardService {
     };
   }
 
-  async liveMap() {
+  async liveMap(appCode: ClientAppCode = 'SZOOP') {
     const access = this.access.current();
     const zonesQb = this.serviceAreaRepo
       .createQueryBuilder('area')
@@ -123,6 +127,7 @@ export class AdminDashboardService {
       .addSelect('address.longitude', 'longitude')
       .where('booking.status IN (:...statuses)', { statuses: ACTIVE_STATUSES })
       .andWhere('customerUser.isActive = true')
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       .andWhere('address.latitude IS NOT NULL')
       .andWhere('address.longitude IS NOT NULL');
     this.access.restrictZoneColumn(customersQb, 'booking.service_area_id');
@@ -215,7 +220,7 @@ export class AdminDashboardService {
   }
 
   /** Staff accounts and the paid revenue collected in the zones assigned to them. */
-  private async teamEarnings(range: ResolvedRange) {
+  private async teamEarnings(range: ResolvedRange, appCode: ClientAppCode) {
     const access = this.access.current();
     const admins = await this.adminRepo.find({
       where: { isActive: true },
@@ -226,6 +231,8 @@ export class AdminDashboardService {
     const earningQb = this.paymentRepo
       .createQueryBuilder('payment')
       .innerJoin('payment.booking', 'booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .select('booking.service_area_id', 'zoneId')
       .addSelect('COALESCE(SUM(payment.amount), 0)', 'earnings')
       .where('payment.paymentStatus = :status', { status: 'PAID' })
@@ -233,6 +240,7 @@ export class AdminDashboardService {
         start: range.start,
         end: range.end,
       })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       .groupBy('booking.service_area_id');
     this.access.restrictZoneColumn(earningQb, 'booking.service_area_id');
     const earningRows = await earningQb.getRawMany<{
@@ -275,18 +283,24 @@ export class AdminDashboardService {
       .sort((a, b) => b.earnings - a.earnings);
   }
 
-  private async customerStats(range: ResolvedRange) {
-    const totalQb = this.customerRepo.createQueryBuilder('customer');
+  private async customerStats(range: ResolvedRange, appCode: ClientAppCode) {
+    const totalQb = this.customerRepo
+      .createQueryBuilder('customer')
+      .innerJoin('customer.user', 'user')
+      .andWhere('user.appCode = :appCode', { appCode });
     const newQb = this.customerRepo
       .createQueryBuilder('customer')
+      .innerJoin('customer.user', 'user')
       .where('customer.createdAt BETWEEN :start AND :end', {
         start: range.start,
         end: range.end,
-      });
+      })
+      .andWhere('user.appCode = :appCode', { appCode });
     const blockedQb = this.customerRepo
       .createQueryBuilder('customer')
       .innerJoin('customer.user', 'user')
-      .where('user.isActive = false');
+      .where('user.isActive = false')
+      .andWhere('user.appCode = :appCode', { appCode });
     this.access.restrictCustomer(totalQb, 'customer');
     this.access.restrictCustomer(newQb, 'customer');
     this.access.restrictCustomer(blockedQb, 'customer');
@@ -340,11 +354,14 @@ export class AdminDashboardService {
     };
   }
 
-  private async bookingStats(range: ResolvedRange) {
+  private async bookingStats(range: ResolvedRange, appCode: ClientAppCode) {
     const statusQb = this.bookingRepo
       .createQueryBuilder('booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .select('booking.status', 'status')
       .addSelect('COUNT(*)::int', 'count')
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       .groupBy('booking.status');
     this.access.restrictZoneColumn(statusQb, 'booking.service_area_id');
     const statusRows = await statusQb.getRawMany<{ status: string; count: number }>();
@@ -356,15 +373,21 @@ export class AdminDashboardService {
 
     const inRangeQb = this.bookingRepo
       .createQueryBuilder('booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .where('booking.bookingDate BETWEEN :from AND :to', {
         from: range.from,
         to: range.to,
-      });
+      })
+      .andWhere('customerUser.appCode = :appCode', { appCode });
     const activeQb = this.bookingRepo
       .createQueryBuilder('booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .where('booking.status IN (:...statuses)', {
         statuses: ACTIVE_STATUSES,
-      });
+      })
+      .andWhere('customerUser.appCode = :appCode', { appCode });
     this.access.restrictZoneColumn(inRangeQb, 'booking.service_area_id');
     this.access.restrictZoneColumn(activeQb, 'booking.service_area_id');
     const [inRange, activeNow] = await Promise.all([
@@ -380,13 +403,16 @@ export class AdminDashboardService {
     };
   }
 
-  private async revenueStats(range: ResolvedRange) {
+  private async revenueStats(range: ResolvedRange, appCode: ClientAppCode) {
     const collected = (from?: Date) => {
       const qb = this.paymentRepo
         .createQueryBuilder('payment')
         .innerJoin('payment.booking', 'booking')
+        .innerJoin('booking.customer', 'customer')
+        .innerJoin('customer.user', 'customerUser')
         .select('COALESCE(SUM(payment.amount), 0)', 'total')
-        .where('payment.paymentStatus = :status', { status: 'PAID' });
+        .where('payment.paymentStatus = :status', { status: 'PAID' })
+        .andWhere('customerUser.appCode = :appCode', { appCode });
       if (from) {
         qb.andWhere('payment.paidAt >= :from', { from });
       }
@@ -400,8 +426,11 @@ export class AdminDashboardService {
         const qb = this.paymentRepo
           .createQueryBuilder('payment')
           .innerJoin('payment.booking', 'booking')
+          .innerJoin('booking.customer', 'customer')
+          .innerJoin('customer.user', 'customerUser')
           .select('COALESCE(SUM(payment.amount), 0)', 'total')
           .where('payment.paymentStatus = :status', { status: 'PAID' })
+          .andWhere('customerUser.appCode = :appCode', { appCode })
           .andWhere('payment.paidAt BETWEEN :start AND :end', {
             start: range.start,
             end: range.end,
@@ -415,8 +444,11 @@ export class AdminDashboardService {
         const qb = this.paymentRepo
           .createQueryBuilder('payment')
           .innerJoin('payment.booking', 'booking')
+          .innerJoin('booking.customer', 'customer')
+          .innerJoin('customer.user', 'customerUser')
           .select('COALESCE(SUM(payment.amount), 0)', 'total')
-          .where('payment.paymentStatus = :status', { status: 'PENDING' });
+          .where('payment.paymentStatus = :status', { status: 'PENDING' })
+          .andWhere('customerUser.appCode = :appCode', { appCode });
         this.access.restrictZoneColumn(qb, 'booking.service_area_id');
         return qb.getRawOne<{ total: string }>();
       })(),
@@ -431,12 +463,15 @@ export class AdminDashboardService {
     };
   }
 
-  private async ratingStats() {
+  private async ratingStats(appCode: ClientAppCode) {
     const ratingQb = this.ratingRepo
       .createQueryBuilder('rating')
       .innerJoin('rating.booking', 'booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .select('COALESCE(AVG(rating.rating), 0)', 'average')
-      .addSelect('COUNT(*)::int', 'count');
+      .addSelect('COUNT(*)::int', 'count')
+      .andWhere('customerUser.appCode = :appCode', { appCode });
     this.access.restrictZoneColumn(ratingQb, 'booking.service_area_id');
     const row = await ratingQb.getRawOne<{ average: string; count: number }>();
 
@@ -446,13 +481,14 @@ export class AdminDashboardService {
     };
   }
 
-  private async supportStats() {
+  private async supportStats(appCode: ClientAppCode) {
     const ticketQb = this.ticketRepo
       .createQueryBuilder('ticket')
       .innerJoin('ticket.user', 'user')
       .leftJoin('user.customer', 'customer')
       .leftJoin('user.agent', 'agent')
       .leftJoin('ticket.booking', 'booking')
+      .andWhere('user.appCode = :appCode', { appCode })
       .select('ticket.status', 'status')
       .addSelect('ticket.priority', 'priority')
       .addSelect('COUNT(*)::int', 'count')

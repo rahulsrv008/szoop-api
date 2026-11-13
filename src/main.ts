@@ -22,6 +22,7 @@ import { createWinstonLoggerOptions } from './logger/logger.config';
 import { ensureLogDir, LOG_DIR } from './logger/log-paths';
 import { CustomLoggerService } from 'src/common/utils/logger.service';
 import { ROUTES } from './app.routes';
+import { clientAccess, originAllowed, readClientAccessMode } from './common/security/client-access';
 
 /** Boots Nest. On Vercel this returns the Express app and does not listen. */
 export async function createServer(listen = !process.env.VERCEL) {
@@ -114,18 +115,7 @@ export async function createServer(listen = !process.env.VERCEL) {
   app.enableCors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      if (
-        !deployed &&
-        /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(
-          origin,
-        )
-      ) {
-        return callback(null, true);
-      }
-      return callback(null, false);
+      return callback(null, originAllowed(origin, allowedOrigins, deployed));
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: [
@@ -135,6 +125,8 @@ export async function createServer(listen = !process.env.VERCEL) {
       'Accept',
       'Authorization',
       'X-Api-Key',
+      'X-App-Key',
+      'X-Client-App',
       'x-correlation-id',
     ],
     credentials: true,
@@ -145,6 +137,30 @@ export async function createServer(listen = !process.env.VERCEL) {
   const swaggerOn =
     (process.env.ENABLE_SWAGGER ?? (appEnv === 'production' ? 'false' : 'true'))
       .toLowerCase() !== 'false';
+
+  const accessMode = readClientAccessMode(configService.get<string>('CLIENT_ACCESS_MODE'), deployed);
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const openPaths = [
+    '/?',
+    '/health/?',
+    `/${escape(ROUTES.API_PREFIX)}/${escape(ROUTES.HEALTH)}/?`,
+    `/${escape(ROUTES.API_PREFIX)}/${escape(ROUTES.WEBHOOKS.PAYMENTS)}/?`,
+    // Swagger lives under /api, so only its own pages and assets, never /api/v1/*.
+    ...(swaggerOn
+      ? [`/${escape(ROUTES.SWAGGER)}/?`, `/${escape(ROUTES.SWAGGER)}/swagger-ui[^/]*`, `/${escape(ROUTES.SWAGGER)}-json`, '/docs(/.*)?']
+      : []),
+  ];
+  app.use(
+    clientAccess({
+      mode: accessMode,
+      appKeys: (configService.get<string>('APP_CLIENT_KEYS') ?? '').split(',').map((key) => key.trim()),
+      allowedOrigins,
+      deployed,
+      openPaths: new RegExp(`^(${openPaths.join('|')})$`),
+      logger: customLoggerService,
+    }),
+  );
+  customLoggerService.log(`client-access mode=${accessMode}`, 'bootstrap');
 
   if (swaggerOn) {
     const packageJson: PackageJson = JSON.parse(

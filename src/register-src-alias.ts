@@ -31,9 +31,20 @@ function existingFile(file: string) {
 
 const origResolve = loader._resolveFilename.bind(loader);
 
+/** ts-node / ts-node-dev register a .ts loader; then a stale dist/ build must not shadow src/. */
+const runningTypeScript = Boolean((require.extensions as Record<string, unknown>)['.ts']);
+
 loader._resolveFilename = function resolveSrcAlias(request, parent, isMain, options) {
   if (typeof request === 'string' && request.startsWith('src/')) {
     const rest = request.slice('src/'.length);
+    if (runningTypeScript) {
+      for (const root of roots) {
+        const base = path.join(root, 'src', rest);
+        for (const file of [`${base}.ts`, path.join(base, 'index.ts')]) {
+          if (existingFile(file)) return origResolve(file, parent, isMain, options);
+        }
+      }
+    }
     for (const root of roots) {
       for (const candidate of [
         path.join(root, 'dist', rest),

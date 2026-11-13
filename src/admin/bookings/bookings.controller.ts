@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   Param,
   ParseUUIDPipe,
@@ -17,6 +18,7 @@ import { ListAdminBookingsDto } from './dto/list-bookings.dto';
 import { AssignAdminBookingAgentDto } from './dto/assign-agent.dto';
 import { ReassignAdminBookingAgentDto } from './dto/reassign-agent.dto';
 import { CancelAdminBookingDto } from './dto/cancel-booking.dto';
+import { clientAppCode } from 'src/common/types/client-app';
 
 @ApiTags('admin')
 @AdminAuth()
@@ -26,16 +28,22 @@ export class AdminBookingsController {
 
   @Get()
   @ApiOperation({ summary: 'List bookings with customer, agent and amounts' })
-  list(@Query() query: ListAdminBookingsDto) {
-    return this.bookingsService.list(query);
+  list(
+    @Query() query: ListAdminBookingsDto,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.bookingsService.list(query, clientAppCode(app));
   }
 
   @Get(':id')
   @ApiOperation({
     summary: 'Full booking detail including payment and history',
   })
-  detail(@Param('id', ParseUUIDPipe) id: string) {
-    return this.bookingsService.detail(id);
+  detail(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.bookingsService.detail(id, clientAppCode(app));
   }
 
   @Post(':id/assign-agent')
@@ -45,8 +53,9 @@ export class AdminBookingsController {
     @CurrentUser('sub') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignAdminBookingAgentDto,
+    @Headers('x-client-app') app?: string,
   ) {
-    return this.bookingsService.assignAgent(adminId, id, dto);
+    return this.bookingsService.assignAgent(adminId, id, dto, clientAppCode(app));
   }
 
   @Post(':id/reassign-agent')
@@ -56,8 +65,9 @@ export class AdminBookingsController {
     @CurrentUser('sub') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReassignAdminBookingAgentDto,
+    @Headers('x-client-app') app?: string,
   ) {
-    return this.bookingsService.reassignAgent(adminId, id, dto);
+    return this.bookingsService.reassignAgent(adminId, id, dto, clientAppCode(app));
   }
 
   @Post(':id/cancel')
@@ -67,7 +77,8 @@ export class AdminBookingsController {
     @CurrentUser('sub') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CancelAdminBookingDto,
+    @Headers('x-client-app') app?: string,
   ) {
-    return this.bookingsService.cancel(adminId, id, dto);
+    return this.bookingsService.cancel(adminId, id, dto, clientAppCode(app));
   }
 }

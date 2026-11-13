@@ -12,6 +12,7 @@ import {
 } from 'src/database/entities';
 import { AdminAccessService } from 'src/common/auth/admin-access';
 import { AdminReportRangeDto } from './dto/report-range.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 const DEFAULT_RANGE_DAYS = 30;
 
@@ -50,14 +51,14 @@ export class AdminReportsService {
   ) {}
 
   /** Summary-level roll-up of the four detailed reports. */
-  async overview(query: AdminReportRangeDto) {
+  async overview(query: AdminReportRangeDto, appCode: ClientAppCode = 'SZOOP') {
     const range = this.resolveRange(query);
 
     const [bookings, revenue, agents, customers] = await Promise.all([
-      this.bookingSeries(range),
-      this.revenueReport(range),
-      this.agentRows(range),
-      this.customerReport(range),
+      this.bookingSeries(range, appCode),
+      this.revenueReport(range, appCode),
+      this.agentRows(range, appCode),
+      this.customerReport(range, appCode),
     ]);
 
     const bookingTotals = bookings.reduce(
@@ -107,9 +108,12 @@ export class AdminReportsService {
     };
   }
 
-  async bookingsReport(query: AdminReportRangeDto) {
+  async bookingsReport(
+    query: AdminReportRangeDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
     const range = this.resolveRange(query);
-    const series = await this.bookingSeries(range);
+    const series = await this.bookingSeries(range, appCode);
 
     return {
       range: { from: range.from, to: range.to },
@@ -127,27 +131,29 @@ export class AdminReportsService {
     };
   }
 
-  async revenue(query: AdminReportRangeDto) {
+  async revenue(query: AdminReportRangeDto, appCode: ClientAppCode = 'SZOOP') {
     const range = this.resolveRange(query);
-    const report = await this.revenueReport(range);
+    const report = await this.revenueReport(range, appCode);
     return { range: { from: range.from, to: range.to }, ...report };
   }
 
-  async agents(query: AdminReportRangeDto) {
+  async agents(query: AdminReportRangeDto, appCode: ClientAppCode = 'SZOOP') {
     const range = this.resolveRange(query);
-    const items = await this.agentRows(range);
+    const items = await this.agentRows(range, appCode);
     return { range: { from: range.from, to: range.to }, items };
   }
 
-  async customers(query: AdminReportRangeDto) {
+  async customers(query: AdminReportRangeDto, appCode: ClientAppCode = 'SZOOP') {
     const range = this.resolveRange(query);
-    const report = await this.customerReport(range);
+    const report = await this.customerReport(range, appCode);
     return { range: { from: range.from, to: range.to }, ...report };
   }
 
-  private async bookingSeries(range: ResolvedRange) {
+  private async bookingSeries(range: ResolvedRange, appCode: ClientAppCode) {
     const bookingQb = this.bookingRepo
       .createQueryBuilder('booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .select(`to_char(booking.bookingDate, 'YYYY-MM-DD')`, 'date')
       .addSelect('COUNT(*)::int', 'total')
       .addSelect(
@@ -170,6 +176,7 @@ export class AdminReportsService {
         from: range.from,
         to: range.to,
       })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       // Only confirmed bookings: unpaid requests (open or voided) never became one.
       .andWhere("booking.status <> 'finding'")
       .andWhere("booking.paymentStatus <> 'VOIDED'")
@@ -195,10 +202,12 @@ export class AdminReportsService {
     }));
   }
 
-  private async revenueReport(range: ResolvedRange) {
+  private async revenueReport(range: ResolvedRange, appCode: ClientAppCode) {
     const dailyQb = this.paymentRepo
       .createQueryBuilder('payment')
       .innerJoin('payment.booking', 'booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .select(
         `to_char(COALESCE(payment.paidAt, payment.createdAt), 'YYYY-MM-DD')`,
         'date',
@@ -220,6 +229,7 @@ export class AdminReportsService {
         'COALESCE(payment.paidAt, payment.createdAt) BETWEEN :start AND :end',
         { start: range.start, end: range.end },
       )
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       .groupBy(
         `to_char(COALESCE(payment.paidAt, payment.createdAt), 'YYYY-MM-DD')`,
       )
@@ -239,6 +249,8 @@ export class AdminReportsService {
     const topQb = this.bookingItemRepo
       .createQueryBuilder('item')
       .innerJoin('item.booking', 'booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .innerJoin('item.service', 'service')
       .select('item.serviceId', 'serviceId')
       .addSelect('service.name', 'serviceName')
@@ -248,6 +260,7 @@ export class AdminReportsService {
         from: range.from,
         to: range.to,
       })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       .andWhere('booking.status = :status', { status: 'completed' })
       .groupBy('item.serviceId')
       .addGroupBy('service.name')
@@ -292,10 +305,13 @@ export class AdminReportsService {
     };
   }
 
-  private async agentRows(range: ResolvedRange) {
+  private async agentRows(range: ResolvedRange, appCode: ClientAppCode) {
     const earningQb = this.earningRepo
       .createQueryBuilder('earning')
       .innerJoin('earning.agent', 'agent')
+      .innerJoin('earning.booking', 'booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .select('earning.agentId', 'agentId')
       .addSelect('agent.firstName', 'firstName')
       .addSelect('agent.lastName', 'lastName')
@@ -307,6 +323,7 @@ export class AdminReportsService {
         from: range.from,
         to: range.to,
       })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       .groupBy('earning.agentId')
       .addGroupBy('agent.firstName')
       .addGroupBy('agent.lastName')
@@ -329,6 +346,9 @@ export class AdminReportsService {
     const [ratingRows, attendanceRows] = await Promise.all([
       this.ratingRepo
         .createQueryBuilder('rating')
+        .innerJoin('rating.booking', 'booking')
+        .innerJoin('booking.customer', 'customer')
+        .innerJoin('customer.user', 'customerUser')
         .select('rating.agentId', 'agentId')
         .addSelect('COALESCE(AVG(rating.rating), 0)', 'average')
         .where('rating.agentId IN (:...agentIds)', { agentIds })
@@ -336,6 +356,7 @@ export class AdminReportsService {
           start: range.start,
           end: range.end,
         })
+        .andWhere('customerUser.appCode = :appCode', { appCode })
         .groupBy('rating.agentId')
         .getRawMany<{ agentId: string; average: string }>(),
       this.attendanceRepo
@@ -371,18 +392,20 @@ export class AdminReportsService {
     }));
   }
 
-  private async customerReport(range: ResolvedRange) {
+  private async customerReport(range: ResolvedRange, appCode: ClientAppCode) {
     const access = this.access.current();
     const [newRows, repeatRow, spendRow, topRows] = await Promise.all([
       (() => {
         const qb = this.customerRepo
           .createQueryBuilder('customer')
+          .innerJoin('customer.user', 'customerUser')
           .select(`to_char(customer.createdAt, 'YYYY-MM-DD')`, 'date')
           .addSelect('COUNT(*)::int', 'count')
           .where('customer.createdAt BETWEEN :start AND :end', {
             start: range.start,
             end: range.end,
           })
+          .andWhere('customerUser.appCode = :appCode', { appCode })
           .groupBy(`to_char(customer.createdAt, 'YYYY-MM-DD')`)
           .orderBy(`to_char(customer.createdAt, 'YYYY-MM-DD')`, 'ASC');
         this.access.restrictCustomer(qb, 'customer');
@@ -397,7 +420,18 @@ export class AdminReportsService {
             sub
               .select('inner_booking.customer_id', 'customerId')
               .from('bookings', 'inner_booking')
+              .innerJoin(
+                'customers',
+                'inner_customer',
+                'inner_customer.id = inner_booking.customer_id',
+              )
+              .innerJoin(
+                'users',
+                'inner_user',
+                'inner_user.id = inner_customer.user_id',
+              )
               .where('inner_booking.booking_date BETWEEN :from AND :to')
+              .andWhere('inner_user.app_code = :appCode')
               .andWhere(
                 access.unrestricted
                   ? '1 = 1'
@@ -412,6 +446,7 @@ export class AdminReportsService {
         .setParameters({
           from: range.from,
           to: range.to,
+          appCode,
           scopeZoneIds: access.zoneIds.length
             ? access.zoneIds
             : ['00000000-0000-0000-0000-000000000000'],
@@ -421,13 +456,16 @@ export class AdminReportsService {
         const qb = this.paymentRepo
           .createQueryBuilder('payment')
           .innerJoin('payment.booking', 'booking')
+          .innerJoin('booking.customer', 'bookingCustomer')
+          .innerJoin('bookingCustomer.user', 'bookingCustomerUser')
           .select('COUNT(DISTINCT payment.customerId)::int', 'customers')
           .addSelect('COALESCE(SUM(payment.amount), 0)', 'spend')
           .where('payment.paymentStatus = :status', { status: 'PAID' })
           .andWhere(
             'COALESCE(payment.paidAt, payment.createdAt) BETWEEN :start AND :end',
             { start: range.start, end: range.end },
-          );
+          )
+          .andWhere('bookingCustomerUser.appCode = :appCode', { appCode });
         this.access.restrictZoneColumn(qb, 'booking.service_area_id');
         return qb.getRawOne<{ customers: number; spend: string }>();
       })(),
@@ -450,6 +488,7 @@ export class AdminReportsService {
           'COALESCE(payment.paidAt, payment.createdAt) BETWEEN :start AND :end',
           { start: range.start, end: range.end },
         )
+        .andWhere('customerUser.appCode = :appCode', { appCode })
         .groupBy('payment.customerId')
         .addGroupBy('customer.firstName')
         .addGroupBy('customer.lastName')

@@ -1,10 +1,11 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ROUTES } from 'src/app.routes';
 import { AdminAuth } from 'src/common/decorators/authorize.decorator';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { AdminMissedJobsService } from './missed-jobs.service';
 import { AdminMissedJobAgentsDto, ListAdminMissedJobsDto, WarnAgentDto } from './dto/missed-jobs.dto';
+import { clientAppCode } from 'src/common/types/client-app';
 
 @ApiTags('admin')
 @AdminAuth()
@@ -14,20 +15,29 @@ export class AdminMissedJobsController {
 
   @Get('agents')
   @ApiOperation({ summary: 'Agents who held a job and did not do it, with counts per reason (last 30 days by default)' })
-  agents(@Query() query: AdminMissedJobAgentsDto) {
-    return this.missedJobsService.agents(query);
+  agents(
+    @Query() query: AdminMissedJobAgentsDto,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.missedJobsService.agents(query, clientAppCode(app));
   }
 
   @Get()
   @ApiOperation({ summary: 'The missed bookings, newest first' })
-  list(@Query() query: ListAdminMissedJobsDto) {
-    return this.missedJobsService.list(query);
+  list(
+    @Query() query: ListAdminMissedJobsDto,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.missedJobsService.list(query, clientAppCode(app));
   }
 
   @Get('agents/:agentId/warning')
   @ApiOperation({ summary: 'The standard warning text for this agent (to read or edit before sending)' })
-  warningPreview(@Param('agentId', ParseUUIDPipe) agentId: string) {
-    return this.missedJobsService.warningPreview(agentId);
+  warningPreview(
+    @Param('agentId', ParseUUIDPipe) agentId: string,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.missedJobsService.warningPreview(agentId, clientAppCode(app));
   }
 
   @Post('agents/:agentId/warn')
@@ -37,7 +47,8 @@ export class AdminMissedJobsController {
     @CurrentUser('sub') adminId: string,
     @Param('agentId', ParseUUIDPipe) agentId: string,
     @Body() dto: WarnAgentDto,
+    @Headers('x-client-app') app?: string,
   ) {
-    return this.missedJobsService.warn(adminId, agentId, dto);
+    return this.missedJobsService.warn(adminId, agentId, dto, clientAppCode(app));
   }
 }

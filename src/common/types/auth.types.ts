@@ -10,6 +10,7 @@ export interface AuthUser {
   customerId?: string;
   agentId?: string;
   adminId?: string;
+  appCode?: 'SZOOP' | 'AIRA';
 }
 
 export interface AuthenticatedRequest {

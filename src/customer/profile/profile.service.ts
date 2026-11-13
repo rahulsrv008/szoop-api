@@ -3,9 +3,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
 import { Customer, SupportTicket, User } from 'src/database/entities';
 import { IdentityService } from 'src/common/auth/identity.service';
+import { OtpService } from 'src/common/auth/otp.service';
+import type { OtpPurpose } from 'src/common/auth/otp.service';
 import { TokenService } from 'src/common/auth/token.service';
 import { UpdateCustomerProfileDto } from './dto/update-profile.dto';
 import { RequestAccountDeletionDto } from './dto/request-account-deletion.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
+import type { OtpDeliveryChannel } from 'src/common/types/otp.types';
+
+function deletionOtpPurpose(appCode: ClientAppCode): OtpPurpose {
+  return appCode === 'AIRA' ? 'aira_account_deletion' : 'szoop_account_deletion';
+}
 
 @Injectable()
 export class CustomerProfileService {
@@ -18,6 +26,7 @@ export class CustomerProfileService {
     @InjectRepository(SupportTicket)
     private readonly ticketRepo: Repository<SupportTicket>,
     private readonly identity: IdentityService,
+    private readonly otp: OtpService,
     private readonly tokens: TokenService,
   ) {}
 
@@ -31,7 +40,11 @@ export class CustomerProfileService {
 
     if (dto.email !== undefined && dto.email !== customer.user.email) {
       const taken = await this.userRepo.findOne({
-        where: { email: dto.email, id: Not(userId) },
+        where: {
+          email: dto.email,
+          id: Not(userId),
+          appCode: customer.user.appCode,
+        },
         select: ['id'],
       });
       if (taken) throw new ConflictException('Email already in use');
@@ -51,22 +64,36 @@ export class CustomerProfileService {
   }
 
   /**
-   * Public web form. Records a ticket and blocks the customer if found.
+   * Verifies phone ownership before recording a ticket and blocking a match.
    * Data is left intact for admin to remove later.
    */
-  async requestDeletion(dto: RequestAccountDeletionDto) {
+  sendDeletionOtp(
+    mobile: string,
+    appCode: ClientAppCode,
+    channel?: OtpDeliveryChannel,
+  ) {
+    return this.otp.send(mobile, deletionOtpPurpose(appCode), { channel });
+  }
+
+  async requestDeletion(
+    dto: RequestAccountDeletionDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
+    await this.otp.verify(dto.mobile, dto.otp, deletionOtpPurpose(appCode));
+
     const user = await this.userRepo.findOne({
-      where: { mobile: dto.mobile, userType: 'customer' },
+      where: { mobile: dto.mobile, userType: 'customer', appCode },
     });
     if (user) {
       await this.blockWithDeletionRequest(user, 'web', dto);
     }
 
-    this.logger.log(`Szoop account-deletion request recorded for ${dto.mobile}`);
+    const appName = appCode === 'AIRA' ? 'Aira Luxury' : 'Szoop';
+    this.logger.log(`${appName} account-deletion request recorded`);
     return {
       received: true,
       message:
-        'If a Szoop customer account exists for this number, it is marked deleted. Signing in again starts a new customer.',
+        `If a ${appName} customer account exists for this number, it is marked deleted. Signing in again starts a new customer.`,
     };
   }
 
@@ -84,7 +111,7 @@ export class CustomerProfileService {
     const open = await this.ticketRepo.findOne({
       where: {
         userId: user.id,
-        subject: 'Szoop account deletion request',
+        subject: `${user.appCode === 'AIRA' ? 'Aira Luxury' : 'Szoop'} account deletion request`,
         status: 'OPEN',
       },
       select: ['id'],
@@ -94,9 +121,9 @@ export class CustomerProfileService {
         this.ticketRepo.create({
           userId: user.id,
           app: 'customer',
-          subject: 'Szoop account deletion request',
+          subject: `${user.appCode === 'AIRA' ? 'Aira Luxury' : 'Szoop'} account deletion request`,
           description: [
-            `${source === 'app' ? 'In-app' : 'Web'} deletion request for Szoop customer ${user.mobile}.`,
+            `${source === 'app' ? 'In-app' : 'Web'} deletion request for ${user.appCode === 'AIRA' ? 'Aira Luxury' : 'Szoop'} customer ${user.mobile}.`,
             'Account marked deleted. Data kept for admin. A later login on this number starts a new customer.',
             extra?.name ? `Name: ${extra.name}` : null,
             extra?.email ? `Email: ${extra.email}` : null,

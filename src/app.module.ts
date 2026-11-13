@@ -12,6 +12,7 @@ import { CustomerModule } from './customer/customer.module';
 import { AgentModule } from './agent/agent.module';
 import { AdminModule } from './admin/admin.module';
 import { DispatchModule } from './dispatch/dispatch.module';
+import { AiraMenuModule } from './aira-menu/aira-menu.module';
 import { AdminAccessInterceptor } from './common/auth/admin-access.interceptor';
 import { RateLimitModule, RateLimitStorageModule } from './common/rate-limit/rate-limit.module';
 
@@ -38,6 +39,7 @@ import { RateLimitModule, RateLimitStorageModule } from './common/rate-limit/rat
     AgentModule,
     AdminModule,
     DispatchModule,
+    AiraMenuModule,
   ],
   controllers: [AppController],
   providers: [

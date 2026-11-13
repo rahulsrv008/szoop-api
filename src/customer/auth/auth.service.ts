@@ -7,6 +7,7 @@ import { OtpService } from 'src/common/auth/otp.service';
 import { TokenService } from 'src/common/auth/token.service';
 import { AuthUser } from 'src/common/types/auth.types';
 import type { OtpDeliveryChannel } from 'src/common/types/otp.types';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 const PURPOSE = 'customer_login' as const;
 
@@ -28,12 +29,12 @@ export class CustomerAuthService {
     return this.otp.send(mobile, PURPOSE, { isResend: true, channel });
   }
 
-  async verifyOtp(mobile: string, otp: string) {
+  async verifyOtp(mobile: string, otp: string, appCode: ClientAppCode) {
     await this.otp.verify(mobile, otp, PURPOSE);
 
-    const user = await this.identity.findOrCreateUser(mobile, 'customer');
+    const user = await this.identity.findOrCreateUser(mobile, 'customer', appCode);
     const customer = await this.identity.ensureCustomer(user.id);
-    const authUser = await this.identity.buildAuthUser(user.id, 'customer');
+    const authUser = await this.identity.buildAuthUser(user.id, 'customer', appCode);
     const session = await this.tokens.issueSession(authUser);
 
     return {
@@ -43,8 +44,8 @@ export class CustomerAuthService {
     };
   }
 
-  refresh(refreshToken: string) {
-    return this.tokens.rotate(refreshToken, 'customer');
+  refresh(refreshToken: string, appCode: ClientAppCode) {
+    return this.tokens.rotate(refreshToken, 'customer', appCode);
   }
 
   logout(user: AuthUser, refreshToken?: string) {

@@ -24,6 +24,7 @@ import { UpdateAdminIncentiveDto } from './dto/update-incentive.dto';
 import { ListAdminSalaryDto } from './dto/list-salary.dto';
 import { GenerateAdminSalaryDto } from './dto/generate-salary.dto';
 import { UpdateAdminSalaryDto } from './dto/update-salary.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 /** Defaults used when the matching system_settings row is missing. */
 const DEFAULT_INCENTIVE_THRESHOLD = 15000;
@@ -73,10 +74,16 @@ export class AdminEarningsService {
     private readonly referralRewards: ReferralRewardsService,
   ) {}
 
-  async listEarnings(query: ListAdminEarningsDto) {
+  async listEarnings(
+    query: ListAdminEarningsDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
     const { skip, take } = skipTake(query);
 
-    const rowsQb = this.applyEarningFilters(this.earningBaseQuery(), query)
+    const rowsQb = this.applyEarningFilters(
+      this.earningBaseQuery(appCode),
+      query,
+    )
       .select('earning.id', 'id')
       .addSelect('earning.agentId', 'agentId')
       .addSelect('agent.firstName', 'agentFirstName')
@@ -93,14 +100,17 @@ export class AdminEarningsService {
       .offset(skip)
       .limit(take);
 
-    const totalsQb = this.applyEarningFilters(this.earningBaseQuery(), query)
+    const totalsQb = this.applyEarningFilters(
+      this.earningBaseQuery(appCode),
+      query,
+    )
       .select('COALESCE(SUM(earning.earningAmount), 0)', 'earnings')
       .addSelect('COALESCE(SUM(earning.revenueGenerated), 0)', 'revenue')
       .addSelect('COALESCE(SUM(earning.serviceHours), 0)', 'hours');
 
     const [rows, total, totals] = await Promise.all([
       rowsQb.getRawMany<EarningListRow>(),
-      this.applyEarningFilters(this.earningBaseQuery(), query).getCount(),
+      this.applyEarningFilters(this.earningBaseQuery(appCode), query).getCount(),
       totalsQb.getRawOne<{
         earnings: string;
         revenue: string;
@@ -135,7 +145,10 @@ export class AdminEarningsService {
     };
   }
 
-  async summary(query: AdminEarningsSummaryDto) {
+  async summary(
+    query: AdminEarningsSummaryDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
     const now = new Date();
     const month = query.month ?? now.getMonth() + 1;
     const year = query.year ?? now.getFullYear();
@@ -144,6 +157,9 @@ export class AdminEarningsService {
     const rowsQb = this.earningRepo
       .createQueryBuilder('earning')
       .innerJoin('earning.agent', 'agent')
+      .innerJoin('earning.booking', 'booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
       .select('earning.agentId', 'agentId')
       .addSelect('agent.firstName', 'firstName')
       .addSelect('agent.lastName', 'lastName')
@@ -152,6 +168,7 @@ export class AdminEarningsService {
       .addSelect('COALESCE(SUM(earning.revenueGenerated), 0)', 'revenue')
       .addSelect('COALESCE(SUM(earning.earningAmount), 0)', 'earnings')
       .where('earning.earningDate BETWEEN :from AND :to', { from, to })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
       .groupBy('earning.agentId')
       .addGroupBy('agent.firstName')
       .addGroupBy('agent.lastName')
@@ -646,11 +663,14 @@ export class AdminEarningsService {
     };
   }
 
-  private earningBaseQuery() {
+  private earningBaseQuery(appCode: ClientAppCode) {
     return this.earningRepo
       .createQueryBuilder('earning')
       .innerJoin('earning.agent', 'agent')
-      .leftJoin('earning.booking', 'booking');
+      .innerJoin('earning.booking', 'booking')
+      .innerJoin('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
+      .andWhere('customerUser.appCode = :appCode', { appCode });
   }
 
   private applyEarningFilters(

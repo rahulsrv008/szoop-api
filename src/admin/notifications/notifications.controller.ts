@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ROUTES } from 'src/app.routes';
 import { AdminAuth } from 'src/common/decorators/authorize.decorator';
@@ -8,6 +8,7 @@ import { SendAdminNotificationDto } from './dto/send-notification.dto';
 import { ListAdminNotificationsDto } from './dto/list-notifications.dto';
 import { RateLimit } from 'src/common/rate-limit/rate-limit.decorator';
 import { RATE_LIMITS } from 'src/common/rate-limit/rate-limit.rules';
+import { clientAppCode } from 'src/common/types/client-app';
 
 @ApiTags('admin')
 @AdminAuth()
@@ -24,13 +25,17 @@ export class AdminNotificationsController {
   send(
     @CurrentUser('sub') adminId: string,
     @Body() dto: SendAdminNotificationDto,
+    @Headers('x-client-app') app?: string,
   ) {
-    return this.notificationsService.send(adminId, dto);
+    return this.notificationsService.send(adminId, dto, clientAppCode(app));
   }
 
   @Get()
   @ApiOperation({ summary: 'Recently sent notifications with read state' })
-  list(@Query() query: ListAdminNotificationsDto) {
-    return this.notificationsService.list(query);
+  list(
+    @Query() query: ListAdminNotificationsDto,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.notificationsService.list(query, clientAppCode(app));
   }
 }

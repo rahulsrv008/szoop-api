@@ -8,6 +8,7 @@ import { NotificationDispatchService } from 'src/common/services/notification-di
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminSupportDto } from './dto/list-support.dto';
 import { UpdateAdminSupportTicketDto } from './dto/update-support.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 interface TicketListRow {
   id: string;
@@ -37,10 +38,10 @@ export class AdminSupportService {
     private readonly access: AdminAccessService,
   ) {}
 
-  async list(query: ListAdminSupportDto) {
+  async list(query: ListAdminSupportDto, appCode: ClientAppCode = 'SZOOP') {
     const { skip, take } = skipTake(query);
 
-    const rowsQb = this.applyFilters(this.baseQuery(), query)
+    const rowsQb = this.applyFilters(this.baseQuery(appCode), query)
       .select('ticket.id', 'id')
       .addSelect('ticket.subject', 'subject')
       .addSelect('ticket.priority', 'priority')
@@ -62,7 +63,7 @@ export class AdminSupportService {
 
     const [rows, total] = await Promise.all([
       rowsQb.getRawMany<TicketListRow>(),
-      this.applyFilters(this.baseQuery(), query).getCount(),
+      this.applyFilters(this.baseQuery(appCode), query).getCount(),
     ]);
 
     return paginated(
@@ -89,8 +90,8 @@ export class AdminSupportService {
     );
   }
 
-  async detail(id: string) {
-    const ticket = await this.requireTicket(id, [
+  async detail(id: string, appCode: ClientAppCode = 'SZOOP') {
+    const ticket = await this.requireTicket(id, appCode, [
       'user',
       'user.customer',
       'user.agent',
@@ -141,8 +142,13 @@ export class AdminSupportService {
    * `support_tickets` has no reply/notes column, so a resolutionNote is
    * delivered to the raiser as a notification and kept in the audit log.
    */
-  async update(adminId: string, id: string, dto: UpdateAdminSupportTicketDto) {
-    const ticket = await this.requireTicket(id);
+  async update(
+    adminId: string,
+    id: string,
+    dto: UpdateAdminSupportTicketDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
+    const ticket = await this.requireTicket(id, appCode);
     const oldData = { status: ticket.status, priority: ticket.priority };
 
     if (dto.status !== undefined) ticket.status = dto.status;
@@ -185,13 +191,14 @@ export class AdminSupportService {
     };
   }
 
-  private baseQuery() {
+  private baseQuery(appCode: ClientAppCode) {
     return this.ticketRepo
       .createQueryBuilder('ticket')
       .innerJoin('ticket.user', 'user')
       .leftJoin('user.customer', 'customer')
       .leftJoin('user.agent', 'agent')
-      .leftJoin('ticket.booking', 'booking');
+      .leftJoin('ticket.booking', 'booking')
+      .andWhere('user.appCode = :appCode', { appCode });
   }
 
   private applyFilters(
@@ -223,9 +230,13 @@ export class AdminSupportService {
     return qb;
   }
 
-  private async requireTicket(id: string, relations: string[] = []) {
+  private async requireTicket(
+    id: string,
+    appCode: ClientAppCode,
+    relations: string[] = [],
+  ) {
     const ticket = await this.ticketRepo.findOne({
-      where: { id },
+      where: { id, user: { appCode } },
       relations: [
         ...new Set([
           ...relations,

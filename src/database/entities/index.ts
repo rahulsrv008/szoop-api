@@ -93,3 +93,7 @@ export { UpcomingCity } from './upcoming-city';
 export { CityWaitlist } from './city-waitlist';
 export { AgentMissedJob } from './agent-missed-job';
 export type { MissedJobReason } from './agent-missed-job';
+export { AiraBeautyGroup } from './aira-beauty-group';
+export type { AiraSegment } from './aira-beauty-group';
+export { AiraBeautyItem } from './aira-beauty-item';
+export type { AiraItemKind } from './aira-beauty-item';

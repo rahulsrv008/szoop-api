@@ -21,6 +21,7 @@ import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { ListAdminCustomersDto } from './dto/list-customers.dto';
 import { UpdateAdminCustomerDto } from './dto/update-customer.dto';
 import { BlockAdminCustomerDto } from './dto/block-customer.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 interface CustomerListRow {
   customerId: string;
@@ -56,7 +57,10 @@ export class AdminCustomersService {
     private readonly access: AdminAccessService,
   ) {}
 
-  async list(query: ListAdminCustomersDto) {
+  async list(
+    query: ListAdminCustomersDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
     const { skip, take } = skipTake(query);
 
     const rowsQb = this.applyFilters(
@@ -65,6 +69,7 @@ export class AdminCustomersService {
         .innerJoin('customer.user', 'user')
         .leftJoin(Booking, 'booking', 'booking.customerId = customer.id'),
       query,
+      appCode,
     )
       .select('customer.id', 'customerId')
       .addSelect('customer.userId', 'userId')
@@ -93,6 +98,7 @@ export class AdminCustomersService {
         .createQueryBuilder('customer')
         .innerJoin('customer.user', 'user'),
       query,
+      appCode,
     );
 
     const [rows, total] = await Promise.all([
@@ -121,8 +127,8 @@ export class AdminCustomersService {
     );
   }
 
-  async detail(id: string) {
-    const customer = await this.requireCustomer(id);
+  async detail(id: string, appCode: ClientAppCode = 'SZOOP') {
+    const customer = await this.requireCustomer(id, appCode);
 
     const [addresses, statusRows, spent, recentBookings, wallet] = await Promise.all([
       this.addressRepo.find({
@@ -208,8 +214,13 @@ export class AdminCustomersService {
     };
   }
 
-  async update(adminId: string, id: string, dto: UpdateAdminCustomerDto) {
-    const customer = await this.requireCustomer(id);
+  async update(
+    adminId: string,
+    id: string,
+    dto: UpdateAdminCustomerDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
+    const customer = await this.requireCustomer(id, appCode);
 
     const oldData = {
       firstName: customer.firstName,
@@ -221,7 +232,11 @@ export class AdminCustomersService {
 
     if (dto.email !== undefined && dto.email !== customer.user.email) {
       const taken = await this.userRepo.findOne({
-        where: { email: dto.email, id: Not(customer.userId) },
+        where: {
+          email: dto.email,
+          id: Not(customer.userId),
+          appCode: customer.user.appCode,
+        },
         select: ['id'],
       });
       if (taken) throw new ConflictException('Email already in use');
@@ -251,11 +266,16 @@ export class AdminCustomersService {
       },
     });
 
-    return this.detail(id);
+    return this.detail(id, appCode);
   }
 
-  async block(adminId: string, id: string, dto: BlockAdminCustomerDto) {
-    const customer = await this.requireCustomer(id);
+  async block(
+    adminId: string,
+    id: string,
+    dto: BlockAdminCustomerDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
+    const customer = await this.requireCustomer(id, appCode);
     const wasActive = customer.user.isActive;
 
     customer.user.isActive = false;
@@ -287,8 +307,12 @@ export class AdminCustomersService {
     };
   }
 
-  async unblock(adminId: string, id: string) {
-    const customer = await this.requireCustomer(id);
+  async unblock(
+    adminId: string,
+    id: string,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
+    const customer = await this.requireCustomer(id, appCode);
     const wasActive = customer.user.isActive;
 
     customer.user.isActive = true;
@@ -322,7 +346,9 @@ export class AdminCustomersService {
   private applyFilters(
     qb: SelectQueryBuilder<Customer>,
     query: ListAdminCustomersDto,
+    appCode: ClientAppCode,
   ) {
+    qb.andWhere('user.appCode = :appCode', { appCode });
     if (query.search) {
       qb.andWhere(
         `(customer.firstName ILIKE :search OR customer.lastName ILIKE :search
@@ -347,11 +373,13 @@ export class AdminCustomersService {
     return qb;
   }
 
-  private async requireCustomer(id: string) {
-    const customer = await this.customerRepo.findOne({
-      where: { id },
-      relations: ['user'],
-    });
+  private async requireCustomer(id: string, appCode: ClientAppCode) {
+    const customer = await this.customerRepo
+      .createQueryBuilder('customer')
+      .innerJoinAndSelect('customer.user', 'user')
+      .where('customer.id = :id', { id })
+      .andWhere('user.appCode = :appCode', { appCode })
+      .getOne();
     if (!customer) throw new NotFoundException('Customer not found');
     await this.access.assertCustomer(customer.id, customer.homeZoneId);
     return customer;

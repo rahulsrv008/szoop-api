@@ -1,12 +1,13 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository, SelectQueryBuilder } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import { Notification, User } from 'src/database/entities';
 import { AuditService } from 'src/common/services/audit.service';
 import { NotificationDispatchService } from 'src/common/services/notification-dispatch.service';
 import { paginated, skipTake } from 'src/common/dto/pagination.dto';
 import { SendAdminNotificationDto } from './dto/send-notification.dto';
 import { ListAdminNotificationsDto } from './dto/list-notifications.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 interface NotificationListRow {
   id: string;
@@ -35,19 +36,40 @@ export class AdminNotificationsService {
   ) {}
 
   /** Blocked users are never notified, whatever the audience. */
-  async send(adminId: string, dto: SendAdminNotificationDto) {
-    const userIds = await this.resolveRecipients(dto);
-    if (!userIds.length) {
+  async send(
+    adminId: string,
+    dto: SendAdminNotificationDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
+    const recipients = await this.resolveRecipients(dto, appCode);
+    const recipientCount =
+      recipients.customerIds.length + recipients.agentIds.length;
+    if (!recipientCount) {
       throw new BadRequestException('No active recipients matched');
     }
 
-    await this.dispatch.toUsers(userIds, {
-      title: dto.title,
-      message: dto.message,
-      type: dto.type ?? 'general',
-      // Customers or agents: only that app. All or specific users: every app they use.
-      app: dto.audience === 'CUSTOMERS' ? 'customer' : dto.audience === 'AGENTS' ? 'agent' : undefined,
-    });
+    await Promise.all([
+      ...(recipients.customerIds.length
+        ? [
+            this.dispatch.toUsers(recipients.customerIds, {
+              title: dto.title,
+              message: dto.message,
+              type: dto.type ?? 'general',
+              app: 'customer',
+            }),
+          ]
+        : []),
+      ...(recipients.agentIds.length
+        ? [
+            this.dispatch.toUsers(recipients.agentIds, {
+              title: dto.title,
+              message: dto.message,
+              type: dto.type ?? 'general',
+              app: 'agent',
+            }),
+          ]
+        : []),
+    ]);
 
     await this.audit.record({
       userId: adminId,
@@ -57,20 +79,24 @@ export class AdminNotificationsService {
       oldData: null,
       newData: {
         audience: dto.audience,
-        recipients: userIds.length,
+        appCode,
+        recipients: recipientCount,
         title: dto.title,
         message: dto.message,
         type: dto.type ?? 'general',
       },
     });
 
-    return { recipients: userIds.length };
+    return { recipients: recipientCount };
   }
 
-  async list(query: ListAdminNotificationsDto) {
+  async list(
+    query: ListAdminNotificationsDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
     const { skip, take } = skipTake(query);
 
-    const rowsQb = this.applyFilters(this.baseQuery(), query)
+    const rowsQb = this.applyFilters(this.baseQuery(appCode), query)
       .select('notification.id', 'id')
       .addSelect('notification.userId', 'userId')
       .addSelect('user.userType', 'userType')
@@ -90,7 +116,7 @@ export class AdminNotificationsService {
 
     const [rows, total] = await Promise.all([
       rowsQb.getRawMany<NotificationListRow>(),
-      this.applyFilters(this.baseQuery(), query).getCount(),
+      this.applyFilters(this.baseQuery(appCode), query).getCount(),
     ]);
 
     return paginated(
@@ -115,47 +141,65 @@ export class AdminNotificationsService {
     );
   }
 
-  private async resolveRecipients(dto: SendAdminNotificationDto) {
+  private async resolveRecipients(
+    dto: SendAdminNotificationDto,
+    appCode: ClientAppCode,
+  ) {
+    const qb = this.userRepo
+      .createQueryBuilder('user')
+      .select('user.id', 'id')
+      .addSelect('user.userType', 'userType')
+      .where('user.isActive = true');
+
     if (dto.audience === 'SPECIFIC') {
       if (!dto.userIds?.length) {
         throw new BadRequestException(
           'userIds is required when audience is SPECIFIC',
         );
       }
-      const users = await this.userRepo.find({
-        where: { id: In(dto.userIds), isActive: true },
-        select: ['id'],
-      });
-      return users.map((user) => user.id);
+      qb.andWhere('user.id IN (:...userIds)', { userIds: dto.userIds });
     }
-
-    const qb = this.userRepo
-      .createQueryBuilder('user')
-      .select('user.id', 'id')
-      .where('user.isActive = true');
-
     if (dto.audience === 'CUSTOMERS') {
       qb.andWhere('user.userType = :userType', { userType: 'customer' });
+      qb.andWhere('user.appCode = :appCode', { appCode });
     }
     if (dto.audience === 'AGENTS') {
       qb.andWhere('user.userType = :userType', { userType: 'agent' });
     }
     if (dto.audience === 'ALL') {
-      qb.andWhere('user.userType IN (:...userTypes)', {
-        userTypes: ['customer', 'agent'],
-      });
+      qb.andWhere(
+        "(user.userType = 'agent' OR (user.userType = 'customer' AND user.appCode = :appCode))",
+        { appCode },
+      );
+    }
+    if (dto.audience === 'SPECIFIC') {
+      qb.andWhere(
+        "(user.userType = 'agent' OR (user.userType = 'customer' AND user.appCode = :appCode))",
+        { appCode },
+      );
     }
 
-    const rows = await qb.getRawMany<{ id: string }>();
-    return rows.map((row) => row.id);
+    const rows = await qb.getRawMany<{ id: string; userType: string }>();
+    return {
+      customerIds: rows
+        .filter((row) => row.userType === 'customer')
+        .map((row) => row.id),
+      agentIds: rows
+        .filter((row) => row.userType === 'agent')
+        .map((row) => row.id),
+    };
   }
 
-  private baseQuery() {
+  private baseQuery(appCode: ClientAppCode) {
     return this.notificationRepo
       .createQueryBuilder('notification')
       .innerJoin('notification.user', 'user')
       .leftJoin('user.customer', 'customer')
-      .leftJoin('user.agent', 'agent');
+      .leftJoin('user.agent', 'agent')
+      .andWhere(
+        "(user.userType = 'agent' OR (user.userType = 'customer' AND user.appCode = :appCode))",
+        { appCode },
+      );
   }
 
   private applyFilters(

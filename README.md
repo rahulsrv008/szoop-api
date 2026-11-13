@@ -12,6 +12,25 @@ Aligned to **CleanIt architecture / STG roadmap**: Auth OTP, Users, Addresses, B
 
 PostgreSQL schema is the full 32-table design (customers, agents, services, bookings, payments, earnings, coupons, support, etc.). Run `sql/001_full_schema.sql` in pgAdmin on the `clearit` database. Keep `DB_SYNC=false`.
 
+## Aira and Szoop customer data
+
+Customer accounts are partitioned by `users.app_code`. Existing users are
+assigned to `SZOOP`; Aira customer requests send `X-Client-App: AIRA`, while
+Szoop requests may omit the header. Customer-linked records stay attached to
+their app-specific user, and the admin's Aira/Szoop selector scopes customer,
+booking, payment, rating, support, notification, and related reporting views.
+Agent and platform configuration remains shared.
+
+Before deploying this change, apply `sql/customer_app_scope.sql` once to each
+target database after the base schema exists. It preserves current user rows as
+Szoop and allows the same mobile number to have a separate account in Aira.
+Do not enable `DB_SYNC` to apply this schema change.
+
+The Aira website account-deletion flow verifies phone ownership by OTP before
+disabling an account. Add `https://airaluxury.in` and
+`https://www.airaluxury.in` to the deployed `ALLOWED_ORIGINS` value so browser
+requests and preflight checks are accepted.
+
 
 ## Environments
 

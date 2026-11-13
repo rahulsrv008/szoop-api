@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   Param,
   ParseUUIDPipe,
@@ -22,6 +23,7 @@ import { UpdateAdminIncentiveDto } from './dto/update-incentive.dto';
 import { ListAdminSalaryDto } from './dto/list-salary.dto';
 import { GenerateAdminSalaryDto } from './dto/generate-salary.dto';
 import { UpdateAdminSalaryDto } from './dto/update-salary.dto';
+import { clientAppCode } from 'src/common/types/client-app';
 
 /** Agent payouts: per-booking earnings, monthly incentives and salary runs. */
 @ApiTags('admin')
@@ -32,14 +34,20 @@ export class AdminEarningsController {
 
   @Get()
   @ApiOperation({ summary: 'List agent earning rows with totals' })
-  listEarnings(@Query() query: ListAdminEarningsDto) {
-    return this.earningsService.listEarnings(query);
+  listEarnings(
+    @Query() query: ListAdminEarningsDto,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.earningsService.listEarnings(query, clientAppCode(app));
   }
 
   @Get('summary')
   @ApiOperation({ summary: 'Per-agent earnings summary for a month' })
-  summary(@Query() query: AdminEarningsSummaryDto) {
-    return this.earningsService.summary(query);
+  summary(
+    @Query() query: AdminEarningsSummaryDto,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.earningsService.summary(query, clientAppCode(app));
   }
 
   @Get('incentives')

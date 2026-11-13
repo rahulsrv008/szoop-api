@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   Param,
   ParseUUIDPipe,
@@ -17,6 +18,7 @@ import { AdminCustomersService } from './customers.service';
 import { ListAdminCustomersDto } from './dto/list-customers.dto';
 import { UpdateAdminCustomerDto } from './dto/update-customer.dto';
 import { BlockAdminCustomerDto } from './dto/block-customer.dto';
+import { clientAppCode } from 'src/common/types/client-app';
 
 @ApiTags('admin')
 @AdminAuth()
@@ -26,14 +28,20 @@ export class AdminCustomersController {
 
   @Get()
   @ApiOperation({ summary: 'List customers with booking counts' })
-  list(@Query() query: ListAdminCustomersDto) {
-    return this.customersService.list(query);
+  list(
+    @Query() query: ListAdminCustomersDto,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.customersService.list(query, clientAppCode(app));
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Customer profile, addresses, spend and bookings' })
-  detail(@Param('id', ParseUUIDPipe) id: string) {
-    return this.customersService.detail(id);
+  detail(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.customersService.detail(id, clientAppCode(app));
   }
 
   @Patch(':id')
@@ -42,8 +50,9 @@ export class AdminCustomersController {
     @CurrentUser('sub') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateAdminCustomerDto,
+    @Headers('x-client-app') app?: string,
   ) {
-    return this.customersService.update(adminId, id, dto);
+    return this.customersService.update(adminId, id, dto, clientAppCode(app));
   }
 
   @Post(':id/block')
@@ -53,8 +62,9 @@ export class AdminCustomersController {
     @CurrentUser('sub') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: BlockAdminCustomerDto,
+    @Headers('x-client-app') app?: string,
   ) {
-    return this.customersService.block(adminId, id, dto);
+    return this.customersService.block(adminId, id, dto, clientAppCode(app));
   }
 
   @Post(':id/unblock')
@@ -63,7 +73,8 @@ export class AdminCustomersController {
   unblock(
     @CurrentUser('sub') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @Headers('x-client-app') app?: string,
   ) {
-    return this.customersService.unblock(adminId, id);
+    return this.customersService.unblock(adminId, id, clientAppCode(app));
   }
 }

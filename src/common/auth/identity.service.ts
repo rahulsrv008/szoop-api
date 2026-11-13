@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Admin, Agent, Customer, User, UserType } from 'src/database/entities';
 import { AuthUser } from '../types/auth.types';
+import type { ClientAppCode } from '../types/client-app';
 
 /**
  * Single source of truth for turning a `users`/`admins` row into the
@@ -23,14 +24,18 @@ export class IdentityService {
     @InjectRepository(Admin) private readonly adminRepo: Repository<Admin>,
   ) { }
 
-  async findOrCreateUser(mobile: string, role: UserType) {
-    let user = await this.userRepo.findOne({ where: { mobile } });
+  async findOrCreateUser(
+    mobile: string,
+    role: UserType,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
+    let user = await this.userRepo.findOne({ where: { mobile, appCode } });
 
     if (user?.deletedAt && role === 'customer') {
-      user = await this.startFreshCustomer(user, mobile);
+      user = await this.startFreshCustomer(user, mobile, appCode);
     } else if (!user) {
       user = await this.userRepo.save(
-        this.userRepo.create({ mobile, userType: role, isActive: true }),
+        this.userRepo.create({ mobile, appCode, userType: role, isActive: true }),
       );
     }
 
@@ -53,7 +58,11 @@ export class IdentityService {
    * stays for admin. If the same user is also an agent, the mobile cannot be
    * freed, so the customer profile is reset instead.
    */
-  private async startFreshCustomer(existing: User, mobile: string) {
+  private async startFreshCustomer(
+    existing: User,
+    mobile: string,
+    appCode: ClientAppCode,
+  ) {
     const agent = await this.agentRepo.findOne({
       where: { userId: existing.id },
       select: ['id'],
@@ -77,7 +86,12 @@ export class IdentityService {
     await this.userRepo.save(existing);
 
     return this.userRepo.save(
-      this.userRepo.create({ mobile, userType: 'customer', isActive: true }),
+      this.userRepo.create({
+        mobile,
+        appCode,
+        userType: 'customer',
+        isActive: true,
+      }),
     );
   }
 
@@ -101,7 +115,11 @@ export class IdentityService {
   }
 
   /** Builds the token payload for a customer/agent user. */
-  async buildAuthUser(userId: string, role: 'customer' | 'agent'): Promise<AuthUser> {
+  async buildAuthUser(
+    userId: string,
+    role: 'customer' | 'agent',
+    appCode?: ClientAppCode,
+  ): Promise<AuthUser> {
     const user = await this.userRepo.findOne({
       where: { id: userId },
       relations: ['customer', 'agent'],
@@ -114,6 +132,9 @@ export class IdentityService {
           : 'This account has been blocked',
       );
     }
+    if (appCode && user.appCode !== appCode) {
+      throw new UnauthorizedException('Account belongs to a different application');
+    }
 
     return {
       sub: user.id,
@@ -122,6 +143,7 @@ export class IdentityService {
       email: user.email ?? undefined,
       customerId: user.customer?.id,
       agentId: user.agent?.id,
+      appCode: user.appCode,
     };
   }
 
@@ -155,7 +177,7 @@ export class IdentityService {
 
     const row = await this.userRepo.findOne({
       where: { id: user.sub },
-      select: ['id', 'isActive', 'deletedAt'],
+      select: ['id', 'isActive', 'deletedAt', 'appCode'],
     });
     if (!row?.isActive) {
       throw new ForbiddenException(
@@ -163,6 +185,9 @@ export class IdentityService {
           ? 'This account has been deleted'
           : 'This account has been blocked',
       );
+    }
+    if (user.role === 'customer' && (user.appCode ?? 'SZOOP') !== row.appCode) {
+      throw new UnauthorizedException('Account belongs to a different application');
     }
   }
 

@@ -11,6 +11,7 @@ import * as jwt from 'jsonwebtoken';
 import { RefreshToken } from 'src/database/entities';
 import { AuthUser } from '../types/auth.types';
 import { IdentityService } from './identity.service';
+import type { ClientAppCode } from '../types/client-app';
 
 export interface IssuedSession {
   accessToken: string;
@@ -61,7 +62,11 @@ export class TokenService {
   }
 
   /** Validates + rotates a refresh token, returning a brand new session. */
-  async rotate(rawToken: string, role: AuthUser['role']): Promise<IssuedSession> {
+  async rotate(
+    rawToken: string,
+    role: AuthUser['role'],
+    appCode: ClientAppCode = 'SZOOP',
+  ): Promise<IssuedSession> {
     const row = await this.refreshRepo.findOne({
       where: { tokenHash: sha256(rawToken), revokedAt: IsNull() },
     });
@@ -75,13 +80,17 @@ export class TokenService {
       throw new UnauthorizedException('Refresh token does not belong to this app');
     }
 
-    row.revokedAt = new Date();
-    await this.refreshRepo.save(row);
-
     const user =
       role === 'admin'
         ? await this.identity.buildAdminAuthUser(row.adminId as string)
-        : await this.identity.buildAuthUser(row.userId as string, role);
+        : await this.identity.buildAuthUser(
+            row.userId as string,
+            role,
+            role === 'customer' ? appCode : undefined,
+          );
+
+    row.revokedAt = new Date();
+    await this.refreshRepo.save(row);
 
     return this.issueSession(user);
   }
@@ -130,6 +139,7 @@ export class TokenService {
       customerId: user.customerId,
       agentId: user.agentId,
       adminId: user.adminId,
+      appCode: user.appCode,
     };
     return jwt.sign(payload, this.accessSecret(), {
       algorithm: 'HS256',

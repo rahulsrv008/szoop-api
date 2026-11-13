@@ -2,6 +2,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   ParseUUIDPipe,
   Query,
@@ -12,6 +13,7 @@ import { AdminAuth } from 'src/common/decorators/authorize.decorator';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { AdminRatingsService } from './ratings.service';
 import { ListAdminRatingsDto } from './dto/list-ratings.dto';
+import { clientAppCode } from 'src/common/types/client-app';
 
 @ApiTags('admin')
 @AdminAuth()
@@ -21,14 +23,20 @@ export class AdminRatingsController {
 
   @Get()
   @ApiOperation({ summary: 'List ratings with a star breakdown summary' })
-  list(@Query() query: ListAdminRatingsDto) {
-    return this.ratingsService.list(query);
+  list(
+    @Query() query: ListAdminRatingsDto,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.ratingsService.list(query, clientAppCode(app));
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Rating detail with its reviews' })
-  detail(@Param('id', ParseUUIDPipe) id: string) {
-    return this.ratingsService.detail(id);
+  detail(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers('x-client-app') app?: string,
+  ) {
+    return this.ratingsService.detail(id, clientAppCode(app));
   }
 
   @Delete(':id')
@@ -36,7 +44,8 @@ export class AdminRatingsController {
   remove(
     @CurrentUser('sub') adminId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @Headers('x-client-app') app?: string,
   ) {
-    return this.ratingsService.remove(adminId, id);
+    return this.ratingsService.remove(adminId, id, clientAppCode(app));
   }
 }

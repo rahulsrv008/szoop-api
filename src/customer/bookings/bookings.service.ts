@@ -36,6 +36,7 @@ import {
   ServicePricing,
 } from 'src/database/entities';
 import { findBeautyService } from './beauty-catalog';
+import { AiraMenuService } from 'src/aira-menu/aira-menu.service';
 import { CreateBeautyBookingDto } from './dto/create-beauty-booking.dto';
 import { CreatePlanBookingDto } from './dto/create-plan-booking.dto';
 import { IdentityService } from 'src/common/auth/identity.service';
@@ -132,6 +133,7 @@ export class CustomerBookingsService {
     private readonly wallet: WalletService,
     private readonly closure: BookingClosureService,
     private readonly couponEligibilityService: CouponEligibilityService,
+    private readonly airaMenu: AiraMenuService,
   ) {}
 
   async create(userId: string, dto: CreateCustomerBookingDto) {
@@ -430,7 +432,8 @@ export class CustomerBookingsService {
   }
 
   async createBeauty(userId: string, dto: CreateBeautyBookingDto) {
-    const service = findBeautyService(dto.serviceId);
+    // The admin-managed Aira menu prices bookings; the bundled list keeps older app builds working.
+    const service = (await this.airaMenu.findBookable(dto.serviceId)) ?? findBeautyService(dto.serviceId);
     if (!service) throw new NotFoundException('This service is unavailable');
 
     const customerId = await this.identity.requireCustomerId(userId);

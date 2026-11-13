@@ -23,6 +23,7 @@ import { ListAdminBookingsDto } from './dto/list-bookings.dto';
 import { AssignAdminBookingAgentDto } from './dto/assign-agent.dto';
 import { ReassignAdminBookingAgentDto } from './dto/reassign-agent.dto';
 import { CancelAdminBookingDto } from './dto/cancel-booking.dto';
+import type { ClientAppCode } from 'src/common/types/client-app';
 
 interface BookingListRow {
   id: string;
@@ -73,7 +74,7 @@ export class AdminBookingsService {
     private readonly skills: AgentSkillsService,
   ) {}
 
-  async list(query: ListAdminBookingsDto) {
+  async list(query: ListAdminBookingsDto, appCode: ClientAppCode = 'SZOOP') {
     const { skip, take } = skipTake(query);
 
     const rowsQb = this.applyFilters(
@@ -83,6 +84,7 @@ export class AdminBookingsService {
         .innerJoin('customer.user', 'customerUser')
         .leftJoin('booking.agent', 'agent'),
       query,
+      appCode,
     )
       .select('booking.id', 'id')
       .addSelect('booking.bookingNumber', 'bookingNumber')
@@ -111,6 +113,7 @@ export class AdminBookingsService {
         .innerJoin('customer.user', 'customerUser')
         .leftJoin('booking.agent', 'agent'),
       query,
+      appCode,
     );
 
     const [rows, total] = await Promise.all([
@@ -142,26 +145,21 @@ export class AdminBookingsService {
     );
   }
 
-  async detail(id: string) {
-    const booking = await this.bookingRepo.findOne({
-      where: { id },
-      relations: [
-        'items',
-        'items.service',
-        'address',
-        'serviceArea',
-        'payment',
-        'payment.transactions',
-        'agent',
-        'agent.user',
-        'customer',
-        'customer.user',
-        'statusHistory',
-        'ratings',
-        'ratings.reviews',
-      ],
-    });
-    if (!booking) throw new NotFoundException('Booking not found');
+  async detail(id: string, appCode: ClientAppCode = 'SZOOP') {
+    const booking = await this.requireBooking(id, appCode, [
+      'items',
+      'items.service',
+      'address',
+      'serviceArea',
+      'payment',
+      'payment.transactions',
+      'agent',
+      'agent.user',
+      'statusHistory',
+      'ratings',
+      'ratings.reviews',
+      'customer.user',
+    ]);
     this.access.assertZone(booking.serviceAreaId, 'Booking');
 
     const trackingPings = await this.locationRepo.count({
@@ -264,8 +262,9 @@ export class AdminBookingsService {
     adminId: string,
     id: string,
     dto: AssignAdminBookingAgentDto,
+    appCode: ClientAppCode = 'SZOOP',
   ) {
-    const booking = await this.requireBooking(id);
+    const booking = await this.requireBooking(id, appCode);
 
     if (!ASSIGNABLE.includes(booking.status)) {
       throw new BadRequestException(
@@ -331,8 +330,9 @@ export class AdminBookingsService {
     adminId: string,
     id: string,
     dto: ReassignAdminBookingAgentDto,
+    appCode: ClientAppCode = 'SZOOP',
   ) {
-    const booking = await this.requireBooking(id);
+    const booking = await this.requireBooking(id, appCode);
 
     if (['ongoing', 'completed', 'cancelled'].includes(booking.status)) {
       throw new BadRequestException(
@@ -406,8 +406,13 @@ export class AdminBookingsService {
     };
   }
 
-  async cancel(adminId: string, id: string, dto: CancelAdminBookingDto) {
-    const booking = await this.requireBooking(id);
+  async cancel(
+    adminId: string,
+    id: string,
+    dto: CancelAdminBookingDto,
+    appCode: ClientAppCode = 'SZOOP',
+  ) {
+    const booking = await this.requireBooking(id, appCode);
     const oldData = {
       status: booking.status,
       paymentStatus: booking.paymentStatus,
@@ -536,7 +541,9 @@ export class AdminBookingsService {
   private applyFilters(
     qb: SelectQueryBuilder<Booking>,
     query: ListAdminBookingsDto,
+    appCode: ClientAppCode,
   ) {
+    qb.andWhere('customerUser.appCode = :appCode', { appCode });
     if (query.search) {
       qb.andWhere('booking.bookingNumber ILIKE :search', {
         search: `%${query.search.trim()}%`,
@@ -568,11 +575,19 @@ export class AdminBookingsService {
     return qb;
   }
 
-  private async requireBooking(id: string) {
-    const booking = await this.bookingRepo.findOne({
-      where: { id },
-      relations: ['customer'],
-    });
+  private async requireBooking(
+    id: string,
+    appCode: ClientAppCode,
+    relations: string[] = [],
+  ) {
+    const booking = await this.bookingRepo
+      .createQueryBuilder('booking')
+      .innerJoinAndSelect('booking.customer', 'customer')
+      .innerJoin('customer.user', 'customerUser')
+      .where('booking.id = :id', { id })
+      .andWhere('customerUser.appCode = :appCode', { appCode })
+      .setFindOptions({ relations })
+      .getOne();
     if (!booking) throw new NotFoundException('Booking not found');
     this.access.assertZone(booking.serviceAreaId, 'Booking');
     return booking;

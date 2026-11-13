@@ -19,6 +19,7 @@ import {
 import { CustomerBookingsController } from './bookings.controller';
 import { CustomerBookingsService } from './bookings.service';
 import { DispatchModule } from 'src/dispatch/dispatch.module';
+import { AiraMenuModule } from 'src/aira-menu/aira-menu.module';
 import { CouponEligibilityService } from 'src/common/services/coupon-eligibility.service';
 
 @Module({
@@ -40,6 +41,7 @@ import { CouponEligibilityService } from 'src/common/services/coupon-eligibility
       HomeCategoryOption,
     ]),
     DispatchModule,
+    AiraMenuModule,
   ],
   controllers: [CustomerBookingsController],
   providers: [CustomerBookingsService, CouponEligibilityService],
