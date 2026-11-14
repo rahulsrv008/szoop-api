@@ -215,34 +215,63 @@ export class AiraMenuService implements OnModuleInit {
   }
 
   private async seedIfEmpty() {
-    if ((await this.groupRepo.count()) > 0) return;
     await this.dataSource.transaction(async (manager) => {
-      await manager.save(
-        AiraBeautyGroup,
-        SEED_GROUPS.map((group, index) => manager.create(AiraBeautyGroup, { ...group, sortOrder: (index + 1) * 10 })),
-      );
-      await manager.save(
-        AiraBeautyItem,
-        SEED_ITEMS.map((item, index) =>
-          manager.create(AiraBeautyItem, {
-            id: item.id,
-            groupId: item.group,
-            kind: item.kind,
-            title: item.title,
-            section: item.section,
-            minutes: item.minutes,
-            price: item.price.toFixed(2),
-            originalPrice: item.originalPrice?.toFixed(2) ?? null,
-            rating: item.rating?.toFixed(2) ?? null,
-            reviewsCount: item.reviewsCount ?? null,
-            badge: item.badge ?? null,
-            segment: item.segment ?? null,
-            includes: item.includes,
-            sortOrder: (SEED_SECTIONS.indexOf(item.section) + 1) * 100 + index,
-          }),
-        ),
-      );
+      // 1. Ensure all seed groups exist and have imageUrl
+      for (const [index, group] of SEED_GROUPS.entries()) {
+        const existing = await manager.findOne(AiraBeautyGroup, { where: { id: group.id } });
+        if (!existing) {
+          await manager.save(
+            AiraBeautyGroup,
+            manager.create(AiraBeautyGroup, { ...group, sortOrder: (index + 1) * 10 }),
+          );
+        } else if (!existing.imageUrl && group.imageUrl) {
+          existing.imageUrl = group.imageUrl;
+          await manager.save(AiraBeautyGroup, existing);
+        }
+      }
+
+      // 2. Ensure all seed items exist and have imageUrl / metadata
+      for (const [index, item] of SEED_ITEMS.entries()) {
+        const existing = await manager.findOne(AiraBeautyItem, { where: { id: item.id } });
+        if (!existing) {
+          await manager.save(
+            AiraBeautyItem,
+            manager.create(AiraBeautyItem, {
+              id: item.id,
+              groupId: item.group,
+              kind: item.kind,
+              title: item.title,
+              section: item.section,
+              minutes: item.minutes,
+              price: item.price.toFixed(2),
+              originalPrice: item.originalPrice?.toFixed(2) ?? null,
+              rating: item.rating?.toFixed(2) ?? null,
+              reviewsCount: item.reviewsCount ?? null,
+              badge: item.badge ?? null,
+              segment: item.segment ?? null,
+              includes: item.includes,
+              imageUrl: item.imageUrl ?? null,
+              sortOrder: (SEED_SECTIONS.indexOf(item.section) + 1) * 100 + index,
+            }),
+          );
+        } else if (!existing.imageUrl && item.imageUrl) {
+          existing.imageUrl = item.imageUrl;
+          if (!existing.originalPrice && item.originalPrice) {
+            existing.originalPrice = item.originalPrice.toFixed(2);
+          }
+          if (!existing.rating && item.rating) {
+            existing.rating = item.rating.toFixed(2);
+          }
+          if (!existing.reviewsCount && item.reviewsCount) {
+            existing.reviewsCount = item.reviewsCount;
+          }
+          if (!existing.badge && item.badge) {
+            existing.badge = item.badge;
+          }
+          await manager.save(AiraBeautyItem, existing);
+        }
+      }
     });
-    this.logger.log(`Seeded the Aira menu: ${SEED_GROUPS.length} groups, ${SEED_ITEMS.length} services`);
+    this.logger.log(`Aira menu verified: ${SEED_GROUPS.length} groups, ${SEED_ITEMS.length} items`);
   }
 }
