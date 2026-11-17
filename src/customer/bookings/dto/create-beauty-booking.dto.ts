@@ -1,12 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import { IsArray, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
 
 export class CreateBeautyBookingDto {
   @ApiProperty({ example: 'pkg-quick' })
   @IsString()
-  @Matches(/^[a-z0-9-]+$/, { message: 'serviceId is not a beauty service' })
-  @MaxLength(40)
+  @Matches(/^[a-z0-9-,]+$/, { message: 'serviceId is not a beauty service' })
+  @MaxLength(500)
   serviceId: string;
+
+  @ApiPropertyOptional({ type: [String], example: ['pkg-quick', 'fac-gold'] })
+  @IsOptional()
+  @IsArray()
+  serviceIds?: string[];
 
   @ApiProperty()
   @IsUUID()
