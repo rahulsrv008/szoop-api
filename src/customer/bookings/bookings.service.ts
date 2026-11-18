@@ -433,8 +433,16 @@ export class CustomerBookingsService {
 
   async createBeauty(userId: string, dto: CreateBeautyBookingDto) {
     // The admin-managed Aira menu prices bookings; the bundled list keeps older app builds working.
-    const service = (await this.airaMenu.findBookable(dto.serviceId)) ?? findBeautyService(dto.serviceId);
-    if (!service) throw new NotFoundException('This service is unavailable');
+    const rawIds = dto.serviceIds?.length
+      ? dto.serviceIds
+      : (dto.serviceId || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+    const services = [];
+    for (const sid of rawIds) {
+      const s = (await this.airaMenu.findBookable(sid)) ?? findBeautyService(sid);
+      if (s) services.push(s);
+    }
+    if (!services.length) throw new NotFoundException('This service is unavailable');
 
     const customerId = await this.identity.requireCustomerId(userId);
     await this.assertNoDues(customerId);
@@ -444,7 +452,7 @@ export class CustomerBookingsService {
     if (!address) throw new NotFoundException('Address not found');
 
     const { bookingDate, startTime, bookingMode } = scheduledSlot(dto.bookingDate, dto.startTime);
-    const subtotal = round2(service.price);
+    const subtotal = round2(services.reduce((acc, curr) => acc + curr.price, 0));
     const coupon = dto.couponCode
       ? await this.resolveCoupon(dto.couponCode, subtotal, customerId, 'SALON')
       : null;
@@ -453,6 +461,16 @@ export class CustomerBookingsService {
     const tax = round2(((subtotal - discount) * taxPercent) / 100);
     const totalAmount = round2(subtotal - discount + tax);
     const serviceArea = await this.resolveAddressZone(address);
+
+    const totalMinutes = services.reduce((acc, curr) => acc + (curr.minutes || 60), 0);
+    const planTitle =
+      services.length === 1
+        ? services[0].title
+        : `${services[0].title} + ${services.length - 1} more`;
+
+    const allIncludes = services
+      .map((s) => `${s.title}: ${s.includes.join(', ')}`)
+      .join(' | ');
 
     const booking = await this.bookingRepo.save(
       this.bookingRepo.create({
@@ -463,7 +481,7 @@ export class CustomerBookingsService {
         bookingDate,
         startTime,
         bookingMode,
-        durationMinutes: service.minutes,
+        durationMinutes: totalMinutes,
         subtotal: subtotal.toFixed(2),
         discount: discount.toFixed(2),
         tax: tax.toFixed(2),
@@ -471,9 +489,9 @@ export class CustomerBookingsService {
         paymentStatus: 'PENDING',
         status: 'finding',
         startOtp: String(randomInt(1000, 10000)),
-        notes: [service.includes.join(', '), dto.notes].filter(Boolean).join(' · ') || null,
+        notes: [allIncludes, dto.notes].filter(Boolean).join(' · ') || null,
         planType: 'HOURLY',
-        planTitle: service.title,
+        planTitle,
         homeCategoryId: null,
         homeOptionId: null,
       }),
@@ -505,7 +523,7 @@ export class CustomerBookingsService {
       booking.id,
       booking.status,
       userId,
-      `Beauty booked by customer: ${service.title}`,
+      `Beauty booked by customer: ${planTitle}`,
     );
 
     return this.detail(userId, booking.id);
