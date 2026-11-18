@@ -181,6 +181,7 @@ export async function createServer(listen = !process.env.VERCEL) {
           '- **customer** — Customer Mobile (OTP auth)',
           '- **agent** — Agent Mobile (OTP auth + job lifecycle)',
           '- **admin** — Admin Web (email/password)',
+          '- **web** — Public website forms',
         ].join('\n'),
       )
       .setVersion(packageJson.version)
@@ -190,6 +191,7 @@ export async function createServer(listen = !process.env.VERCEL) {
       .addTag('customer', 'Customer Mobile App')
       .addTag('agent', 'Agent Mobile App')
       .addTag('admin', 'Admin Web')
+      .addTag('web', 'Public website forms')
       .addBearerAuth(SwaggerConfig, 'access-token')
       .build();
 

@@ -15,6 +15,7 @@ import { DispatchModule } from './dispatch/dispatch.module';
 import { AiraMenuModule } from './aira-menu/aira-menu.module';
 import { AdminAccessInterceptor } from './common/auth/admin-access.interceptor';
 import { RateLimitModule, RateLimitStorageModule } from './common/rate-limit/rate-limit.module';
+import { PartnerInquiriesModule } from './web/partner-inquiries/partner-inquiries.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { RateLimitModule, RateLimitStorageModule } from './common/rate-limit/rat
     AdminModule,
     DispatchModule,
     AiraMenuModule,
+    PartnerInquiriesModule,
   ],
   controllers: [AppController],
   providers: [

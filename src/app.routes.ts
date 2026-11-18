@@ -82,6 +82,11 @@ export const ROUTES = {
     COUPON_RULES: 'admin/coupon-rules',
     HOME_CONTENT: 'admin/home-content',
     AIRA_MENU: 'admin/aira-menu',
+    PARTNER_INQUIRIES: 'admin/partner-inquiries',
+  },
+
+  WEB: {
+    PARTNER_INQUIRIES: 'web/partner-inquiries',
   },
 
   WEBHOOKS: {

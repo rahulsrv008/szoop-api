@@ -31,6 +31,12 @@ disabling an account. Add `https://airaluxury.in` and
 `https://www.airaluxury.in` to the deployed `ALLOWED_ORIGINS` value so browser
 requests and preflight checks are accepted.
 
+The Aira website partner form posts to
+`POST /api/v1/web/partner-inquiries`; the API validates and rate-limits each
+submission, then saves it for review in the admin panel under **Aira → Partner
+inquiries**. Apply `sql/partner_inquiries.sql` to each target database before
+deploying this endpoint.
+
 
 ## Environments
 

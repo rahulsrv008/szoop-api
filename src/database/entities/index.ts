@@ -97,3 +97,4 @@ export { AiraBeautyGroup } from './aira-beauty-group';
 export type { AiraSegment } from './aira-beauty-group';
 export { AiraBeautyItem } from './aira-beauty-item';
 export type { AiraItemKind } from './aira-beauty-item';
+export { PartnerInquiry } from './partner-inquiry';

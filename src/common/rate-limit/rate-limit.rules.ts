@@ -38,6 +38,7 @@ export const RATE_LIMITS = {
   REFERRAL_VALIDATE: { bucket: 'referral-validate', limit: 30, ttl: HOUR, by: 'user' },
   ACCOUNT_DELETION: { bucket: 'account-deletion', limit: 5, ttl: HOUR, by: 'ip' },
   ACCOUNT_DELETE: { bucket: 'account-delete', limit: 3, ttl: HOUR, by: 'user' },
+  PARTNER_INQUIRY: { bucket: 'partner-inquiry', limit: 5, ttl: HOUR, by: 'ip' },
 } satisfies Record<string, RateLimitRule>;
 
 /** Per-account / per-number limits enforced in services (not by IP). */
